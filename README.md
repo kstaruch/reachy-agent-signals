@@ -2,7 +2,7 @@
 
 My Reachy Mini Lite physically signals when any of my coding-agent sessions starts a task, finishes it, or is blocked waiting for me, so I can look away from the terminal without missing anything.
 
-> **Status:** specification stage. Nothing to install yet. The design is in [`docs/spec.md`](docs/spec.md).
+> **Status:** in development, not usable yet. The design is in [`docs/spec.md`](docs/spec.md); progress is tracked as one [GitHub issue per milestone](https://github.com/kstaruch/reachy-agent-signals/issues).
 
 ## How it works
 
@@ -26,9 +26,37 @@ Everything is controlled from settings rather than by uninstalling anything: ena
 
 ## Requirements
 
-- Reachy Mini Lite connected by USB, with its daemon running (Reachy Mini Control desktop app, or `reachy-mini-daemon`). Developed against daemon **1.14.0**.
-- macOS or Windows.
-- Claude Code (first event source). [herdr](https://herdr.dev) support is planned.
+| What | Why | Install |
+|---|---|---|
+| macOS or Windows | | |
+| Reachy Mini Lite, plugged into power and USB | the robot | |
+| Reachy Mini daemon **1.14.0** | the robot's REST API, which the bridge drives | [Reachy Mini Control](https://hf.co/reachy-mini/#/download) desktop app (bundles the daemon), or `uv tool install "reachy-mini==1.14.0"` |
+| [uv](https://docs.astral.sh/uv/) **≥ 0.13.4** | installs and runs this tool. Older versions trust revoked certificate authorities ([Pollen notice](https://huggingface.co/docs/reachy_mini/SDK/installation)) | macOS: `brew install uv`. Windows: `winget install astral-sh.uv`, or `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| Python **3.12** | runtime | `uv python install 3.12` (uv manages it) |
+| [Claude Code](https://code.claude.com) | first event source | see its docs |
+
+[herdr](https://herdr.dev) support is planned.
+
+How to start, stop and check the daemon, real or simulated: [`docs/reachy-daemon.md` → Running the daemon](docs/reachy-daemon.md#running-the-daemon). In short: open Reachy Mini Control with the robot plugged in, and quit it to stop. Or run `reachy-mini-daemon` and stop it with Ctrl+C. Both wake the robot on start and put it to sleep on stop.
+
+## Development
+
+Extra tools: `git`, and [`gh`](https://cli.github.com) for issues. Git LFS isn't needed for this project, only for Pollen's own apps and model assets.
+
+```bash
+uv sync                      # create .venv with runtime + dev dependencies
+uv run pytest                # tests
+uv run ruff check            # lint
+uv run reachy-signals ...    # run the CLI from the checkout
+```
+
+Runtime dependencies are deliberately few: `platformdirs` and `tomlkit` ([D9](docs/decisions.md#d9--minimal-runtime-dependencies)).
+
+Simulated robot for development, without hardware, on port 8001 (stop with Ctrl+C):
+
+```bash
+uvx --python 3.12 --from "reachy-mini==1.14.0" reachy-mini-daemon --mockup-sim --headless --no-media --fastapi-port 8001
+```
 
 ## Documentation
 

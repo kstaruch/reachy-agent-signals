@@ -8,6 +8,7 @@ enabled = true                  # master switch: false = accept events, do nothi
 [bridge]
 port = 8765                     # localhost only
 daemon_url = "http://localhost:8000/api"
+max_event_age = "10s"           # events older than this when their turn comes are dropped, never replayed
 
 [sources.claude-code]
 mode = "drive"                  # drive | shadow | off   (shadow = log only)
@@ -17,8 +18,8 @@ mode = "off"                    # planned: start in "shadow"
 
 [quiet]
 enabled = false                 # manual toggle
-schedule = []                   # e.g. ["22:00-08:00"]
-allow = ["blocked"]             # events that still get a reaction in quiet mode
+schedule = []                   # local time, e.g. ["22:00-08:00"]; ranges may cross midnight
+# What still reacts in quiet mode is set by [quiet.reactions]: an empty list = no reaction.
 
 # Move names from the built-in libraries:
 #   pollen-robotics/reachy-mini-emotions-library

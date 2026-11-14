@@ -36,3 +36,11 @@ Some emotion moves play their own sound, and the play endpoint has no mute optio
 ## D7 — A standalone tool, for now
 
 This stays its own small tool rather than becoming a module of a larger assistant app running on the same robot. The daemon's app lock already keeps two controllers from fighting over the robot. Folding it into something bigger stays possible later: the bridge's event endpoint is the seam where another system would plug in.
+
+## D8 — `blocked` means a prompt or a question, not idle
+
+Claude Code's `Notification` hook fires for several types. Only `permission_prompt` and `elicitation_dialog` mean the agent can't continue. `idle_prompt` fires ~60 s after *every* finished response the user hasn't answered. Counting it would turn each `done` into `cheerful1` → `attentive1` a minute later → `toc-toc-toc` three minutes after that. The plugin filters with the hook `matcher`, so other types never reach the bridge.
+
+## D9 — Minimal runtime dependencies
+
+`emit` starts a fresh Python process on every hook, so import time is latency on every prompt. Runtime dependencies are `platformdirs` (settings path) and `tomlkit` (editing the settings file without losing comments). Reading TOML uses stdlib `tomllib`, and HTTP to the bridge and the daemon uses stdlib `urllib`. No web framework, no HTTP client library, no file-watcher library: hot reload polls the file's modification time.
