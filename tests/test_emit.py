@@ -74,9 +74,24 @@ def test_bad_input_still_exits_0(tmp_path, args):
 
 
 def test_invalid_settings_still_exits_0(tmp_path):
+    """With unreadable settings emit falls back to the default port 8765.
+
+    That's the port a real bridge uses, so take it first: never post to a bridge
+    that's running on this machine (it would move the robot).
+    """
     cfg = tmp_path / "config.toml"
     cfg.write_text("enabled = = broken", encoding="utf-8")
-    assert run_emit(["done"], json.dumps(HOOK), cfg)[0].returncode == 0
+    with socket.socket() as listener:
+        try:
+            listener.bind(("127.0.0.1", 8765))
+        except OSError:
+            pytest.skip("port 8765 is in use (a real bridge?): not posting to it")
+        listener.listen(1)
+        listener.settimeout(5)
+        proc, _ = run_emit(["done"], json.dumps(HOOK), cfg)
+        conn, _ = listener.accept()  # the fallback went to 8765, and only to our listener
+        conn.close()
+    assert proc.returncode == 0
 
 
 def test_garbage_stdin_still_sends_event(bridge_server):

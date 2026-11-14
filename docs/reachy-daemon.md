@@ -41,13 +41,13 @@ Readiness sequence that works (mockup-sim): `POST /api/motors/set_mode/enabled`,
 
 ## Measured lengths
 
-Wall-clock from play request until `/api/move/running` was empty.
+Wall-clock from play request until `/api/move/running` was empty. The lower bounds for `cheerful1` and `yeah_nod` come from the bridge's reaction records during a real Claude Code session (2026-11-14).
 
 | Move | Library | Length | Sound |
 |---|---|---|---|
 | `success1` | emotions | 4.4 s | |
 | `success2` | emotions | 4.1 s | |
-| `cheerful1` | emotions | 4.1–4.7 s | yes |
+| `cheerful1` | emotions | 3.0–4.7 s | yes |
 | `proud1` | emotions | 5.3 s | |
 | `enthusiastic1` | emotions | 4.6 s | |
 | `attentive1` | emotions | 5.5–6.3 s | yes |
@@ -57,7 +57,7 @@ Wall-clock from play request until `/api/move/running` was empty.
 | `waiting` | emotions | 10.9 s | |
 | `understanding1` | emotions | 5.7 s | |
 | `simple_nod` | dances | 2.1 s | |
-| `yeah_nod` | dances | 2.06–2.3 s | no |
+| `yeah_nod` | dances | 1.91–2.3 s | no |
 | `uh_huh_tilt` | dances | 2.0 s | |
 
 Blank sound column = not checked yet.
