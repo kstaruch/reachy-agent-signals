@@ -56,7 +56,7 @@ Wall-clock from play request until `/api/move/running` was empty.
 | `waiting` | emotions | 10.9 s | |
 | `understanding1` | emotions | 5.7 s | |
 | `simple_nod` | dances | 2.1 s | |
-| `yeah_nod` | dances | 2.1–2.3 s | no |
+| `yeah_nod` | dances | 2.06–2.3 s | no |
 | `uh_huh_tilt` | dances | 2.0 s | |
 
 Blank sound column = not checked yet.
@@ -74,7 +74,9 @@ Exactly one daemon can own the robot. The bridge only needs *a* daemon at `bridg
 2. Open **Reachy Mini Control**. When the robot is detected the app starts its own daemon on `127.0.0.1:8000`. In the app it shows "Ready".
 3. Quit the app to stop the daemon. The robot goes to sleep.
 
-To verify on this machine: the exact button or step that starts the daemon, and that quitting the app stops it. On 2026-11-14 the app was running with no daemon listening.
+Confirmed 2026-11-14: a daemon started from the app serves the full API on `127.0.0.1:8000`; its status reports `desktop_app_daemon` and, on real hardware, `backend_status.ready` and `control_loop_stats`. With the app open the daemon isn't necessarily running: it has to be started in the app. Still to verify: the exact button, and that quitting the app stops the daemon.
+
+The daemon client (`src/reachy_signals/daemon.py`) was checked on the real robot the same day: lock `free`, motors already `enabled` (no wake-up needed), `yeah_nod` played through `play_when_idle` and finished in 2.06 s.
 
 The app ships its own daemon and Python environment. On macOS they are under `~/Library/Application Support/com.pollen-robotics.reachy-mini/apps_venv/` (the daemon is `bin/reachy-mini-daemon`, version 1.14.0, without MuJoCo).
 
