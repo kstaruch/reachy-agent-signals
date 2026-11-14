@@ -146,5 +146,14 @@ Answer these by watching real sessions (the event log from milestone 2 onwards),
 
 - What clears `blocked` most reliably: the next `UserPromptSubmit`, the next tool run (`PreToolUse` / `PostToolUse`, which would need an internal clear-only event with no reaction), or `Stop`.
 - What happens when the user presses Esc at a permission prompt. `Stop` doesn't fire, so the session may stay blocked and escalate for nothing.
+- How often `blocked` fires at all in `auto` permission mode, which the main user runs in. Permission prompts are rare there, so `elicitation_dialog` may be the main source.
+
+### Observed so far
+
+From a real session on 2026-11-14 (Claude Code 2.1.325, macOS, `permission_mode: auto`):
+
+- **Payload fields match the docs** for `UserPromptSubmit` (`session_id`, `cwd`, `hook_event_name`, `permission_mode`, `prompt`), `Stop` (`stop_hook_active`) and `PreToolUse` / `PostToolUse` (`tool_name`). `Notification` and `PermissionRequest` have not been observed yet, so the `blocked` path is still unverified against real payloads.
+- **Esc mid-task sends nothing.** An interrupted turn shows as `started` followed by the next prompt's `started`, with no `done` and no other hook in between. So an interrupt is invisible until the next prompt. That's harmless for `started`/`done`; for `blocked` it's the open question above.
+- **Latency:** an event reaches the bridge ~40 ms after the hook fires.
 - Whether `started` on every prompt is too much even with a 2-second nod; possibly debounce per session, and ignore `UserPromptSubmit` that isn't a human prompt (e.g. `/reachy` itself, `/loop` iterations).
 - Whether to put the robot back to sleep after a gesture if the bridge woke it.
