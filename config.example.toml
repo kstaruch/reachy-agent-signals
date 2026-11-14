@@ -1,0 +1,40 @@
+# reachy-agent-signals settings — sketch, v1
+# macOS:   ~/Library/Application Support/reachy-signals/config.toml
+# Windows: %APPDATA%\reachy-signals\config.toml
+# The bridge reloads this file on change. Prefer editing it through the CLI.
+
+enabled = true                  # master switch: false = accept events, do nothing
+
+[bridge]
+port = 8765                     # localhost only
+daemon_url = "http://localhost:8000/api"
+
+[sources.claude-code]
+mode = "drive"                  # drive | shadow | off   (shadow = log only)
+
+[sources.herdr]
+mode = "off"                    # planned: start in "shadow"
+
+[quiet]
+enabled = false                 # manual toggle
+schedule = []                   # e.g. ["22:00-08:00"]
+allow = ["blocked"]             # events that still get a reaction in quiet mode
+
+# Move names from the built-in libraries:
+#   pollen-robotics/reachy-mini-emotions-library
+#   pollen-robotics/reachy-mini-dances-library
+# Several names = random pick. Empty list = no reaction.
+
+[reactions]
+started = ["yeah_nod"]
+done    = ["cheerful1"]
+blocked = ["attentive1"]
+
+[quiet.reactions]               # used instead of [reactions] while quiet mode is on
+started = ["yeah_nod"]          # placeholder: same as normal until silent moves are picked
+done    = ["cheerful1"]         # placeholder: has sound
+blocked = ["attentive1"]        # placeholder: has sound
+
+[escalation]                    # still blocked after this long → play once
+blocked_after = "3m"
+blocked = ["toc-toc-toc"]
