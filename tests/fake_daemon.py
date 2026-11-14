@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import socketserver
 import threading
 import time
 import urllib.parse
@@ -133,3 +134,8 @@ class _Server(ThreadingHTTPServer):
     def __init__(self, fake: FakeDaemon) -> None:
         self.fake = fake
         super().__init__(("127.0.0.1", 0), _Handler)
+
+    def server_bind(self) -> None:
+        # Skip HTTPServer's reverse-DNS lookup (35 s on GitHub's macOS runners).
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = "127.0.0.1", self.server_address[1]
