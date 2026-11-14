@@ -1,0 +1,14 @@
+{
+  "name": "reachy-agent-signals",
+  "description": "Claude Code plugin for reachy-agent-signals: a Reachy Mini robot signals agent session state.",
+  "owner": {
+    "name": "kstaruch"
+  },
+  "plugins": [
+    {
+      "name": "reachy-signals",
+      "source": "./plugin",
+      "description": "Reachy Mini reacts when Claude Code starts a task, finishes, or is blocked waiting for you."
+    }
+  ]
+}

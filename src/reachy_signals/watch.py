@@ -41,7 +41,7 @@ class SettingsWatcher:
     ) -> None:
         self.path = path
         self.interval = interval
-        self._on_change = on_change
+        self.on_change = on_change
         self._lock = threading.Lock()
         self._sig = _signature(path)
         self._settings = load(path)
@@ -66,8 +66,8 @@ class SettingsWatcher:
         with self._lock:
             self._settings = new
         log.info("settings: reloaded %s", self.path if sig else "(file removed: defaults)")
-        if self._on_change:
-            self._on_change(new)
+        if self.on_change:
+            self.on_change(new)
         return True
 
     def start(self) -> None:

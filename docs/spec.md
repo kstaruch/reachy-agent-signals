@@ -56,11 +56,21 @@ A coding-agent session reaching one of three moments makes the robot react, so t
   "session": "<session id>",
   "cwd": "/path/to/project",
   "detail": "permission_prompt",
-  "ts": "2026-11-14T10:00:00Z"
+  "ts": "2026-11-14T10:00:00Z",
+  "hook": {"hook_event_name": "Notification", "notification_type": "permission_prompt", "permission_mode": "default"}
 }
 ```
 
 `session` and `cwd` identify which session it is: needed for clearing state, escalation and, later, deduplication between sources.
+
+- `event` is `started`, `done`, `blocked`, or `observe`. `observe` is logged and never reacts. The plugin sends it for extra hooks (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `SubagentStop`, `StopFailure`, every `Notification` type) while the open questions below are being settled. `detail` names the hook and tool or type, e.g. `PreToolUse:Bash`.
+- `hook` holds selected fields of the hook payload for the event log. Never the prompt text, tool input or messages: a prompt is reduced to its length and leading slash command (e.g. `/loop`).
+
+Bridge HTTP endpoints on `127.0.0.1:<bridge.port>`:
+- `POST /events`: one event as JSON. Requires `Content-Type: application/json`, which keeps web pages from posting cross-origin without a preflight. Answers `202 {"decision": ...}`.
+- `GET /health`: liveness, counts per decision, event log path.
+
+Event log: one JSON line per event received, with the bridge's `decision`. macOS `~/Library/Logs/reachy-signals/events.jsonl`, Windows `%LOCALAPPDATA%\reachy-signals\Logs\events.jsonl`. Rotated at 10 MB, keeping one backup.
 
 ### Claude Code mapping
 

@@ -2,7 +2,7 @@
 
 My Reachy Mini Lite physically signals when any of my coding-agent sessions starts a task, finishes it, or is blocked waiting for me, so I can look away from the terminal without missing anything.
 
-> **Status:** in development, not usable yet. The design is in [`docs/spec.md`](docs/spec.md); progress is tracked as one [GitHub issue per milestone](https://github.com/kstaruch/reachy-agent-signals/issues).
+> **Status:** in development. Milestone 2: events from Claude Code are received and logged; the robot doesn't move yet. The design is in [`docs/spec.md`](docs/spec.md); progress is tracked as one [GitHub issue per milestone](https://github.com/kstaruch/reachy-agent-signals/issues).
 
 ## How it works
 
@@ -38,6 +38,28 @@ Everything is controlled from settings rather than by uninstalling anything: ena
 [herdr](https://herdr.dev) support is planned.
 
 How to start, stop and check the daemon, real or simulated: [`docs/reachy-daemon.md` → Running the daemon](docs/reachy-daemon.md#running-the-daemon). In short: open Reachy Mini Control with the robot plugged in, and quit it to stop. Or run `reachy-mini-daemon` and stop it with Ctrl+C. Both wake the robot on start and put it to sleep on stop.
+
+## Try it (milestone 2: events are logged, the robot doesn't move yet)
+
+```bash
+# 1. Install the CLI from a checkout. --editable: code changes apply without reinstalling
+uv tool install --editable .
+reachy-signals paths            # where the settings file and event log live
+
+# 2. Run the bridge in its own terminal (Ctrl+C to stop)
+reachy-signals serve
+
+# 3. Install the Claude Code plugin from this repo
+claude plugin marketplace add /path/to/reachy-agent-signals
+claude plugin install reachy-signals@reachy-agent-signals
+```
+
+Start a new Claude Code session from a terminal where `reachy-signals` is on `PATH`; hooks use that terminal's `PATH`. Each prompt, finish and permission prompt then shows up in the `serve` output and in the event log.
+
+- While working on the plugin itself: `claude --plugin-dir ./plugin`, then `/reload-plugins` after edits. A marketplace install runs from a cached copy.
+- `/hooks` in Claude Code lists the plugin's hooks. `claude --debug` shows each hook run with its exit status.
+- `REACHY_SIGNALS_DEBUG=1` makes `emit` print why it failed. Normally it is silent and always exits 0.
+- `REACHY_SIGNALS_CONFIG` and `REACHY_SIGNALS_LOG_DIR` override the settings file and log directory, e.g. for a test bridge.
 
 ## Development
 
