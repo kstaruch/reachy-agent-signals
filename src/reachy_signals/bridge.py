@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import signal
+import socketserver
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -120,6 +121,13 @@ class _Server(ThreadingHTTPServer):
     def __init__(self, bridge: Bridge, port: int) -> None:
         self.bridge = bridge
         super().__init__((HOST, port), _Handler)
+
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind calls socket.getfqdn(), a reverse DNS lookup that took
+        # 35 s on GitHub's macOS runners. We only ever bind 127.0.0.1, so skip it.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = HOST
+        self.server_port = self.server_address[1]
 
 
 def make_server(bridge: Bridge, port: int) -> _Server:

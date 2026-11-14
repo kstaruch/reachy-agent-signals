@@ -7,7 +7,7 @@ enabled = true                  # master switch: false = accept events, do nothi
 
 [bridge]
 port = 8765                     # localhost only
-daemon_url = "http://localhost:8000/api"
+daemon_url = "http://127.0.0.1:8000/api"  # not "localhost": see docs/reachy-daemon.md
 max_event_age = "10s"           # events older than this when their turn comes are dropped, never replayed
 
 [sources.claude-code]

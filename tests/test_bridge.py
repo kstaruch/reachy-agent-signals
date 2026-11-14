@@ -74,10 +74,20 @@ def test_second_bridge_on_same_port_fails(bridge_server, tmp_path):
         make_server(Bridge(bridge.watcher, EventLog(tmp_path / "x.jsonl")), port)
 
 
+def non_loopback_ip():
+    """This machine's outward IP, found without DNS (a UDP connect sends nothing)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed
+            return s.getsockname()[0]
+        except OSError:
+            return None
+
+
 def test_listens_on_localhost_only(bridge_server):
     _, port, _ = bridge_server
-    host_ip = socket.gethostbyname(socket.gethostname())
-    if host_ip.startswith("127."):
+    host_ip = non_loopback_ip()
+    if not host_ip or host_ip.startswith("127.") or host_ip == "0.0.0.0":
         pytest.skip("no non-loopback address to test against")
     with pytest.raises(OSError), socket.create_connection((host_ip, port), timeout=1):
         pass

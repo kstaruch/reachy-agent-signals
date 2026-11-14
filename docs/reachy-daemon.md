@@ -4,8 +4,9 @@ Checked against a live Reachy Mini Lite on macOS, daemon **1.14.0** run by the R
 
 ## Connection
 
-- Lite: daemon runs on the computer the robot is plugged into, at `http://localhost:8000/api`.
+- Lite: daemon runs on the computer the robot is plugged into, at `http://127.0.0.1:8000/api`.
 - It listens on **127.0.0.1 only**. Anything on another machine has to go through the bridge.
+- Programs should use `http://127.0.0.1:8000`, not `localhost`. On Windows `localhost` usually resolves to IPv6 `::1` first, where nothing listens, and a refused connection costs ~2 s before the fallback to 127.0.0.1. Seen on the CI Windows runner as ~2 s per refused connection; not yet measured against a running daemon on Windows.
 - Only one controller at a time: while an app holds the robot, scripts can't drive it.
 
 ## Endpoints the bridge uses
@@ -109,7 +110,7 @@ Stop it with **Ctrl+C**. Checked on 2026-11-14:
 - the dataset list works;
 - `yeah_nod` plays and `/api/move/running` empties after 1.9 s (real robot: 2.1 s).
 
-That makes it good enough for the daemon-client and bridge tests. Point the bridge at it with `daemon_url = "http://localhost:8001/api"`.
+That makes it good enough for the daemon-client and bridge tests. Point the bridge at it with `daemon_url = "http://127.0.0.1:8001/api"`.
 
 The full physics simulation is `--sim`, which needs `reachy-mini[mujoco]`; on macOS it runs as `mjpython -m reachy_mini.daemon.app.main --sim` ([quickstart](https://huggingface.co/docs/reachy_mini/SDK/quickstart)). This project doesn't need it.
 

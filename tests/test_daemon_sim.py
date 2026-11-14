@@ -16,7 +16,7 @@ import pytest
 
 from reachy_signals.daemon import DANCES, EMOTIONS, DaemonClient, DaemonError, MoveNotFound
 
-SIM_URL = os.environ.get("REACHY_SIGNALS_SIM_URL", "http://localhost:8001/api")
+SIM_URL = os.environ.get("REACHY_SIGNALS_SIM_URL", "http://127.0.0.1:8001/api")
 
 pytestmark = pytest.mark.sim
 

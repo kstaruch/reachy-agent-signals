@@ -54,7 +54,7 @@ class Reactions:
 @dataclass(frozen=True)
 class BridgeSettings:
     port: int = 8765
-    daemon_url: str = "http://localhost:8000/api"
+    daemon_url: str = "http://127.0.0.1:8000/api"
     max_event_age: float = 10.0  # seconds
 
 
