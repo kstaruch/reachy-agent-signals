@@ -28,3 +28,20 @@ def bridge_server(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+@pytest.fixture
+def fake_daemon():
+    """A fake daemon on a free port. Yields (FakeDaemon, base_url)."""
+    from fake_daemon import FakeDaemon, _Server
+
+    fake = FakeDaemon()
+    server = _Server(fake)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+    thread.start()
+    try:
+        yield fake, f"http://127.0.0.1:{server.server_address[1]}/api"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

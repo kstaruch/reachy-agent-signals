@@ -35,3 +35,5 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["sim: needs the mockup-sim daemon (REACHY_SIGNALS_SIM_URL, default http://localhost:8001/api)"]

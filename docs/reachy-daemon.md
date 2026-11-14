@@ -15,10 +15,10 @@ Checked against a live Reachy Mini Lite on macOS, daemon **1.14.0** run by the R
 | `GET /api/daemon/status` | Health. `state` (`running`), `backend_status.motor_control_mode`, `backend_status.error`, control loop stats on real hardware (~20 ms period is healthy). `backend_status.ready` appeared on the real robot but not in `--mockup-sim`: don't rely on it |
 | `GET /api/motors/status` | `{"mode": ...}`: `enabled`, `disabled` or `gravity_compensation`. Anything but `enabled` = can't play moves |
 | `GET /api/daemon/robot-app-lock-status` | `{"state": "free", "holder_name": null}` when nothing holds the robot. Other states: `local_app`, `remote_session`, with `holder_name` set |
-| `POST /api/move/play/recorded-move-dataset/{dataset}/{move}` | Play a library move. `dataset` is URL-encoded (`pollen-robotics%2Freachy-mini-emotions-library`). No body, no mute option |
+| `POST /api/move/play/recorded-move-dataset/{dataset}/{move}` | Play a library move; returns `{"uuid": ...}`. `dataset` is URL-encoded (`pollen-robotics%2Freachy-mini-emotions-library`). No body, no mute option. Unknown move → **404** `{"detail": "Move X not found in recorded moves library ..."}`. First use of a dataset may download it from Hugging Face |
 | `GET /api/move/recorded-move-datasets/list/{dataset}` | List move names in a dataset |
-| `GET /api/move/running` | Empty when no move is playing — poll to serialise |
-| `POST /api/move/stop` | Interrupt the current move |
+| `GET /api/move/running` | `[{"uuid": ...}]`, empty when no move is playing. Poll to serialise |
+| `POST /api/move/stop` | Stop **one** move: body `{"uuid": "<move uuid>"}` (required, 422 without it). A uuid that isn't running (e.g. already finished) → **500** |
 | `POST /api/move/goto` | Direct pose. Body `GotoModelRequest`: `duration` (required), `antennas` `[left, right]` in radians, `body_yaw`, `head_pose` `{x, y, z, roll, pitch, yaw}`, `interpolation` (default `minjerk`). Returns a move `uuid` |
 | `POST /api/move/play/wake_up`, `/api/move/play/goto_sleep` | Wake / sleep poses. Return a move `uuid` like any move, so wait on `/api/move/running` before the next gesture |
 | `POST /api/motors/set_mode/{mode}` | Enable motors before moving (`mode` = `enabled`) |
@@ -27,6 +27,11 @@ Checked against a live Reachy Mini Lite on macOS, daemon **1.14.0** run by the R
 
 > [!WARNING]
 > With motors disabled (robot asleep after an app stops, or just after the daemon starts) the daemon **accepts move commands, reports success and does nothing**. Check `motor_control_mode` before every gesture.
+
+> [!WARNING]
+> **The daemon doesn't queue moves.** A play request while another move runs is accepted and gets a uuid, but it is then **silently dropped**: it never appears in `/api/move/running` and never plays. Wait until `/api/move/running` is empty before every play. Verified on 1.14.0 mockup-sim, 2026-11-14 (`yeah_nod` then `simple_nod` straight after: only `yeah_nod` ran).
+
+Readiness sequence that works (mockup-sim): `POST /api/motors/set_mode/enabled`, then `POST /api/move/play/wake_up`, then wait for its uuid to leave `/api/move/running` (~1 s in sim). The client is `src/reachy_signals/daemon.py`; its tests in `tests/test_daemon_sim.py` run against mockup-sim and skip unless the daemon reports a simulation mode.
 
 ## Move libraries
 

@@ -80,6 +80,8 @@ Simulated robot for development, without hardware, on port 8001 (stop with Ctrl+
 uvx --python 3.12 --from "reachy-mini==1.14.0" reachy-mini-daemon --mockup-sim --headless --no-media --fastapi-port 8001
 ```
 
+With it running, `uv run pytest` also runs the daemon tests in `tests/test_daemon_sim.py` (`-m sim` for only those). Without it they're skipped. They refuse to run against a daemon that isn't a simulation.
+
 ## Documentation
 
 | File | Contents |
