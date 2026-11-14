@@ -1,6 +1,7 @@
 """The bridge: one process, localhost TCP, receives events from adapters.
 
-Milestone 2: receive, decide drop/pass, log. No robot yet.
+Receives events, decides drop/pass, logs them, and hands passing events to the
+Reactor, the single thread that moves the robot.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Any
 from . import policy
 from .eventlog import EventLog
 from .events import Event, EventError, now_iso
+from .reactor import Reactor
 from .watch import SettingsWatcher
 
 log = logging.getLogger(__name__)
@@ -30,9 +32,12 @@ MAX_BODY = 64_000
 class Bridge:
     """Bridge state, independent of HTTP so it can be tested directly."""
 
-    def __init__(self, watcher: SettingsWatcher, event_log: EventLog) -> None:
+    def __init__(
+        self, watcher: SettingsWatcher, event_log: EventLog, reactor: Reactor | None = None
+    ) -> None:
         self.watcher = watcher
         self.event_log = event_log
+        self.reactor = reactor
         self.started_at = now_iso()
         self._counts: dict[str, int] = {}
         self._lock = threading.Lock()
@@ -42,7 +47,10 @@ class Bridge:
         self.event_log.append({"received": now_iso(), **event.to_dict(), "decision": decision})
         with self._lock:
             self._counts[decision] = self._counts.get(decision, 0) + 1
-        log.info(
+        if self.reactor is not None:
+            self.reactor.submit(event, decision)
+        log.log(
+            logging.DEBUG if decision == policy.OBSERVE else logging.INFO,
             "%s %s %s session=%s -> %s",
             event.source,
             event.event,
@@ -60,6 +68,7 @@ class Bridge:
             "started_at": self.started_at,
             "events": counts,
             "log": str(self.event_log.path),
+            **(self.reactor.status() if self.reactor else {}),
         }
 
 
@@ -162,7 +171,9 @@ def serve(config: Path, log_path: Path) -> int:
             log.warning("bridge.port changed to %s: restart `serve` to use it", new.bridge.port)
 
     watcher.on_change = on_change
-    bridge = Bridge(watcher, EventLog(log_path))
+    event_log = EventLog(log_path)
+    reactor = Reactor(watcher.current, event_log)
+    bridge = Bridge(watcher, event_log, reactor)
     try:
         server = make_server(bridge, port)
     except OSError as e:
@@ -172,6 +183,8 @@ def serve(config: Path, log_path: Path) -> int:
     log.info("settings: %s", config)
     log.info("event log: %s", log_path)
     _stop_on_signals()
+    threading.Thread(target=_check_moves, args=(watcher,), daemon=True).start()
+    reactor.start()
     with watcher:
         try:
             server.serve_forever(poll_interval=0.5)
@@ -179,4 +192,26 @@ def serve(config: Path, log_path: Path) -> int:
             log.info("stopping")
         finally:
             server.server_close()
+            reactor.stop()
     return 0
+
+
+def _check_moves(watcher: SettingsWatcher) -> None:
+    """Warn at startup about reaction names that aren't in the move libraries."""
+    from .daemon import DaemonClient, DaemonError
+
+    s = watcher.current()
+    names = [
+        *(n for e in ("started", "done", "blocked") for n in s.reactions.for_event(e)),
+        *(n for e in ("started", "done", "blocked") for n in s.quiet.reactions.for_event(e)),
+        *s.escalation.blocked,
+    ]
+    try:
+        unknown = DaemonClient(s.bridge.daemon_url).unknown_moves(names)
+    except DaemonError as e:
+        log.warning("daemon: %s (reactions will be skipped until it is up)", e)
+        return
+    if unknown:
+        log.warning("settings: unknown move names: %s", ", ".join(unknown))
+    else:
+        log.info("daemon: reachable, all reaction moves found")

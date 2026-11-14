@@ -96,7 +96,18 @@ Verified against the [hooks reference](https://code.claude.com/docs/en/hooks.md)
 4. **Make sure it can move.** If the motor mode is anything other than `enabled` (`disabled`, `gravity_compensation`), enable and wake up first. The daemon accepts moves silently while motors are off, so this check is not optional.
 5. **Serialise.** One gesture at a time. Priority `blocked` > `done` > `started`. A `blocked` arriving during a lower-priority gesture interrupts it (`POST /api/move/stop`). Several `started` events in a burst collapse into one.
 6. **Drop stale events.** A reaction that comes late is misleading. An event older than `bridge.max_event_age` when its turn comes is logged and dropped, never replayed. That covers the daemon being down, the robot being locked, or a long queue. A queued event for a session that has since sent a newer event is dropped too.
-7. **Track blocked sessions.** A session stays blocked until its next event. If still blocked after `escalation.blocked_after`, play the escalation reaction once.
+7. **Track blocked sessions.** A session stays blocked until its next event. If still blocked after `escalation.blocked_after`, play the escalation reaction once. In quiet mode the escalation is skipped when `[quiet.reactions] blocked` is empty, so silencing `blocked` silences its reminder too.
+   - **Which events clear it (provisional):** `started`, `done`, a new `blocked`, and the main agent's tool hooks (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`) or `StopFailure`. A tool can't run while the agent waits for the user, so a tool hook after a permission prompt means it was answered. These don't clear it: `PermissionRequest` and `Notification`, which arrive around the block itself, a subagent's tool hooks, and other sessions. Clearing also drops anything still queued for that session. To confirm against real blocked sessions (open question below).
+
+Every outcome is written to the event log as a `"kind": "reaction"` record:
+- `played`, `interrupted` (with the move and `seconds`);
+- `no-reaction`, `locked` (with the holder), `daemon-unavailable`, `unknown-move`, `error`;
+- `stale`, `superseded`, `collapsed`, `cleared`;
+- or the drop/pass decision when settings changed while the event was queued.
+
+At startup `serve` checks that every configured move exists and warns about unknown names.
+
+After a gesture the robot is left awake, even if the bridge woke it (open question below).
 
 The bridge is also the only path to the robot for the CLI: `try` asks the bridge to play a reaction, and `status` asks the bridge for robot state. Neither calls the daemon itself.
 
@@ -144,7 +155,7 @@ reachy-signals try <event>           play the configured reaction now (through t
 
 Answer these by watching real sessions (the event log from milestone 2 onwards), not by guessing.
 
-- What clears `blocked` most reliably: the next `UserPromptSubmit`, the next tool run (`PreToolUse` / `PostToolUse`, which would need an internal clear-only event with no reaction), or `Stop`.
+- What clears `blocked` most reliably: the next `UserPromptSubmit`, the next tool run (`PreToolUse` / `PostToolUse`), or `Stop`. Implemented provisionally as "any of these" (Bridge behaviour, step 7); confirm from real blocked sessions.
 - What happens when the user presses Esc at a permission prompt. `Stop` doesn't fire, so the session may stay blocked and escalate for nothing.
 - How often `blocked` fires at all in `auto` permission mode, which the main user runs in. Permission prompts are rare there, so `elicitation_dialog` may be the main source.
 
