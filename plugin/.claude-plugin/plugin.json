@@ -1,6 +1,6 @@
 {
   "name": "reachy-signals",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Reachy Mini reacts when Claude Code starts a task, finishes, or is blocked waiting for you. Needs the reachy-signals CLI on PATH and `reachy-signals serve` running.",
   "license": "MIT",
   "author": {

@@ -157,3 +157,29 @@ def test_blocked_sessions_report():
     )
     (info,) = s.blocked_sessions(42)
     assert info["session"] == "a" and info["seconds"] == 42 and info["escalated"] is False
+
+
+def test_manual_job_skips_session_rules():
+    s = Scheduler()
+    s.submit_manual(ev("blocked", "try"), 0)
+    assert s.blocked == {}  # a `try` never starts a blocked episode
+    submit(s, ev("started", "a"), 0.1)  # doesn't collapse the manual job
+    s.submit_manual(ev("started", "try"), 0.2)
+    submit(s, ev("started", "b"), 0.3)
+    assert drain(s, 0.3) == [("blocked", "try"), ("started", "try"), ("started", "b")]
+
+
+def test_manual_job_waits_longer_than_max_event_age():
+    s = Scheduler()
+    s.submit_manual(ev("done", "try"), 0)
+    job, dropped = s.pop(S, 25)
+    assert job is not None and job.manual and dropped == []
+    s.submit_manual(ev("done", "try"), 0)
+    job, dropped = s.pop(S, 31)
+    assert job is None and [r for _, r in dropped] == [STALE]
+
+
+def test_manual_escalation_kind():
+    s = Scheduler()
+    s.submit_manual(ev("blocked", "try"), 0, escalation=True)
+    assert drain(s) == [("escalation", "try")]

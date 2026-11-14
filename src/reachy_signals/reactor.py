@@ -61,6 +61,31 @@ class Reactor:
 
     # --- input --------------------------------------------------------------
 
+    def try_reaction(self, kind: str, timeout: float = 45.0) -> dict[str, Any]:
+        """Play the configured reaction for ``kind`` now and wait for the outcome.
+
+        ``kind`` is an event name or ``escalation``. Ignores the master switch and
+        source modes (it's an explicit request) but uses quiet reactions when quiet
+        mode is on, and leaves a robot held by another app alone.
+        """
+        done = threading.Event()
+        box: dict[str, Any] = {}
+
+        def on_done(record: dict[str, Any]) -> None:
+            box.update(record)
+            done.set()
+
+        escalation = kind == "escalation"
+        event = Event(
+            source="cli", event="blocked" if escalation else kind, session="try", detail="try"
+        )
+        with self._cond:
+            self._sched.submit_manual(event, self._clock(), escalation, on_done)
+            self._cond.notify_all()
+        if not done.wait(timeout):
+            return {"outcome": "timeout", "reaction": kind}
+        return box
+
     def submit(self, event: Event, decision: str) -> None:
         with self._cond:
             dropped = self._sched.submit(event, decision, self._clock())
@@ -115,7 +140,7 @@ class Reactor:
 
     def _execute(self, job: Job, settings: Settings) -> None:
         # Settings may have changed while the job waited: check drop/pass again.
-        decision = policy.drop_or_pass(settings, job.event)
+        decision = policy.PASS if job.manual else policy.drop_or_pass(settings, job.event)
         if decision != policy.PASS:
             self._record(job, decision)
             return
@@ -199,18 +224,19 @@ class Reactor:
 
     def _record(self, job: Job, outcome: str, **extra: Any) -> None:
         ev = job.event
-        self._log.append(
-            {
-                "received": now_iso(),
-                "kind": "reaction",
-                "reaction": job.kind,
-                "source": ev.source,
-                "session": ev.session,
-                "cwd": ev.cwd,
-                "outcome": outcome,
-                **extra,
-            }
-        )
+        record = {
+            "received": now_iso(),
+            "kind": "reaction",
+            "reaction": job.kind,
+            "source": ev.source,
+            "session": ev.session,
+            "cwd": ev.cwd,
+            "outcome": outcome,
+            **extra,
+        }
+        self._log.append(record)
+        if job.on_done is not None:
+            job.on_done(record)
         level = logging.INFO if outcome in (PLAYED, INTERRUPTED, NO_REACTION) else logging.WARNING
         log.log(
             level,

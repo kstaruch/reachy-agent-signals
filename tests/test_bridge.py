@@ -11,8 +11,8 @@ from reachy_signals.events import Event
 from reachy_signals.settings import parse
 
 
-def request(port, method, path, body=None, content_type="application/json"):
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+def request(port, method, path, body=None, content_type="application/json", timeout=5):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     headers = {"Content-Type": content_type} if body is not None else {}
     conn.request(method, path, body=body, headers=headers)
     resp = conn.getresponse()
@@ -119,3 +119,55 @@ def test_log_rotation(tmp_path):
         log.append({"i": i, "pad": "x" * 30})
     assert (tmp_path / "events.1.jsonl").exists()
     assert log.tail(100)[-1]["i"] == 9
+
+
+def prompt(slash):
+    return {"hook_event_name": "UserPromptSubmit", "prompt": {"length": 12, "slash": slash}}
+
+
+def test_reachy_command_turn_does_not_react(bridge_server):
+    bridge, port, _ = bridge_server
+    for slash in ("/reachy", "/reachy-signals:reachy"):
+        assert post_event(port, event="started", session="s", hook=prompt(slash))[1] == {
+            "decision": "control"
+        }
+        assert post_event(port, event="done", session="s")[1] == {"decision": "control"}
+    # the next real turn reacts again
+    assert (
+        post_event(port, event="started", session="s", hook=prompt(None))[1]["decision"] == "pass"
+    )
+    assert post_event(port, event="done", session="s")[1]["decision"] == "pass"
+
+
+def test_control_turn_is_per_session(bridge_server):
+    _, port, _ = bridge_server
+    post_event(port, event="started", session="a", hook=prompt("/reachy"))
+    assert post_event(port, event="done", session="b")[1]["decision"] == "pass"
+    assert post_event(port, event="done", session="a")[1]["decision"] == "control"
+
+
+def test_other_slash_commands_react(bridge_server):
+    _, port, _ = bridge_server
+    assert post_event(port, event="started", session="s", hook=prompt("/loop"))[1] == {
+        "decision": "pass"
+    }
+
+
+def test_status_endpoint_without_daemon(bridge_server):
+    bridge, port, cfg = bridge_server
+    # port 9: nothing listens (and the real daemon on :8000 is never asked)
+    cfg.write_text('[bridge]\ndaemon_url = "http://127.0.0.1:9/api"\n', encoding="utf-8")
+    bridge.watcher.check()
+    status, body = request(port, "GET", "/status", timeout=10)
+    assert status == 200 and body["settings"]["enabled"] is True
+    assert body["settings"]["reactions"]["done"] == ["cheerful1"]
+    assert body["robot"]["reachable"] is False
+
+
+@pytest.mark.parametrize(
+    ("body", "status"),
+    [('{"event": "done"}', 503), ('{"event": "observe"}', 400), ("[]", 400)],
+)
+def test_try_endpoint_errors(bridge_server, body, status):
+    _, port, _ = bridge_server  # this fixture has no reactor
+    assert request(port, "POST", "/try", body)[0] == status

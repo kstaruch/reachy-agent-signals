@@ -10,7 +10,8 @@ OBSERVE = "observe"  # observation-only event, never reacts
 DISABLED = "disabled"  # master switch off
 SOURCE_OFF = "source-off"
 SHADOW = "shadow"  # logged to compare sources, robot doesn't move
-PASS = "pass"  # goes on to reaction choice (milestone 4)
+PASS = "pass"  # goes on to reaction choice
+CONTROL = "control"  # a /reachy command's own turn: the robot doesn't react to itself
 
 
 def drop_or_pass(settings: Settings, event: Event) -> str:

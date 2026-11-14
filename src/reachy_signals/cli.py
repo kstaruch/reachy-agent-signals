@@ -21,7 +21,9 @@ def _version() -> str:
 def build_parser():
     import argparse
 
+    from .bridge import TRY_KINDS
     from .events import EVENT_NAMES
+    from .settings import MODES
 
     parser = argparse.ArgumentParser(
         prog="reachy-signals",
@@ -37,6 +39,20 @@ def build_parser():
         "emit", help="send an event to the bridge (used by hooks; reads hook JSON from stdin)"
     )
     emit.add_argument("event", choices=EVENT_NAMES)
+
+    sub.add_parser("on", help="master switch on: the robot reacts")
+    sub.add_parser("off", help="master switch off: events are logged, the robot stays still")
+    quiet = sub.add_parser("quiet", help="show quiet mode, or turn it on or off")
+    quiet.add_argument("state", nargs="?", choices=("on", "off"))
+    source = sub.add_parser("source", help="set how a source's events are used")
+    source.add_argument("name", help="e.g. claude-code, herdr")
+    source.add_argument("mode", choices=MODES, help="drive | shadow (log only) | off")
+    status = sub.add_parser(
+        "status", help="settings, robot state, blocked sessions (via the bridge)"
+    )
+    status.add_argument("--json", action="store_true", help="machine-readable output")
+    try_ = sub.add_parser("try", help="play the configured reaction now (via the bridge)")
+    try_.add_argument("event", choices=TRY_KINDS)
 
     sub.add_parser("paths", help="show the settings file and event log locations")
     return parser
@@ -79,5 +95,17 @@ def main(argv: list[str] | None = None) -> int:
         return _serve(args.verbose)
     if args.command == "paths":
         return _paths()
+    if args.command in ("on", "off", "quiet", "source", "status", "try"):
+        from . import control
+
+        if args.command in ("on", "off"):
+            return control.set_enabled(args.command == "on")
+        if args.command == "quiet":
+            return control.quiet(None if args.state is None else args.state == "on")
+        if args.command == "source":
+            return control.source(args.name, args.mode)
+        if args.command == "status":
+            return control.status(args.json)
+        return control.try_reaction(args.event)
     build_parser().print_help()
     return 0

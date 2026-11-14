@@ -8,8 +8,9 @@ in reactor.py owns one Scheduler and does the daemon calls.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import policy
 from .events import REACTION_EVENTS, Event
@@ -29,6 +30,9 @@ COLLAPSED = "collapsed"  # burst of `started`: only the newest plays
 STALE = "stale"  # older than bridge.max_event_age when its turn came
 CLEARED = "cleared"  # blocked job dropped because the session is running again
 
+# `reachy-signals try` waits for its gesture, so it may wait behind a long one.
+MANUAL_MAX_AGE = 30.0
+
 
 @dataclass(frozen=True)
 class Job:
@@ -36,6 +40,8 @@ class Job:
     received: float  # monotonic
     seq: int
     escalation: bool = False
+    manual: bool = False  # `reachy-signals try`: no drop/pass, no blocked tracking
+    on_done: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False)
 
     @property
     def priority(self) -> int:
@@ -77,19 +83,38 @@ class Scheduler:
             return dropped
         if event.event == "started":
             dropped += self._remove(
-                lambda j: j.event.event == "started" and not j.escalation, COLLAPSED
+                lambda j: j.event.event == "started" and not (j.escalation or j.manual), COLLAPSED
             )
         if event.event == "blocked":
             self.blocked[key] = _Blocked(since=now, event=event)
         self.pending.append(Job(event=event, received=now, seq=next(self._seq)))
         return dropped
 
+    def submit_manual(
+        self,
+        event: Event,
+        now: float,
+        escalation: bool = False,
+        on_done: Callable[[dict[str, Any]], None] | None = None,
+    ) -> Job:
+        """Queue a `try`: plays like a real event but leaves session state alone."""
+        job = Job(
+            event=event,
+            received=now,
+            seq=next(self._seq),
+            escalation=escalation,
+            manual=True,
+            on_done=on_done,
+        )
+        self.pending.append(job)
+        return job
+
     # --- output -------------------------------------------------------------
 
     def pop(self, settings: Settings, now: float) -> tuple[Job | None, list[tuple[Job, str]]]:
         """Next job to play (highest priority, then oldest), plus jobs dropped as stale."""
         self._queue_due_escalations(settings, now)
-        dropped = self._remove(lambda j: now - j.received > settings.bridge.max_event_age, STALE)
+        dropped = self._remove(lambda j: now - j.received > _max_age(j, settings), STALE)
         if not self.pending:
             return None, dropped
         job = max(self.pending, key=lambda j: (j.priority, -j.seq))
@@ -137,6 +162,10 @@ class Scheduler:
         gone = [j for j in self.pending if pred(j)]
         self.pending = [j for j in self.pending if not pred(j)]
         return [(j, reason) for j in gone]
+
+
+def _max_age(job: Job, settings: Settings) -> float:
+    return MANUAL_MAX_AGE if job.manual else settings.bridge.max_event_age
 
 
 def _session_key(event: Event) -> str:

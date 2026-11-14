@@ -51,3 +51,14 @@ def test_reaction_mapping_matches_spec():
         ("Stop", None, "done"),
         ("Notification", "permission_prompt|elicitation_dialog", "blocked"),  # D8: not idle
     }
+
+
+def test_reachy_skill():
+    text = (PLUGIN / "skills" / "reachy" / "SKILL.md").read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    front = text.split("---\n")[1]
+    fields = dict(line.split(": ", 1) for line in front.strip().splitlines())
+    assert fields["name"] == "reachy"  # frontmatter name also makes bare /reachy work
+    assert fields["disable-model-invocation"] == "true"  # Claude never toggles it by itself
+    assert fields["allowed-tools"] == "Bash(reachy-signals *)"
+    assert "reachy-signals $ARGUMENTS" in text

@@ -68,7 +68,9 @@ A coding-agent session reaching one of three moments makes the robot react, so t
 
 Bridge HTTP endpoints on `127.0.0.1:<bridge.port>`:
 - `POST /events`: one event as JSON. Requires `Content-Type: application/json`, which keeps web pages from posting cross-origin without a preflight. Answers `202 {"decision": ...}`.
-- `GET /health`: liveness, counts per decision, event log path.
+- `GET /health`: liveness, counts per decision, event log path, what's playing and pending, blocked sessions.
+- `GET /status`: `/health` plus the settings in effect and robot state (daemon reachable, motor mode, app lock). Used by `reachy-signals status`.
+- `POST /try`: `{"event": "started" | "done" | "blocked" | "escalation"}`. Plays that reaction and answers with the outcome when it's done. Used by `reachy-signals try`.
 
 Event log: one JSON line per event received, with the bridge's `decision`. macOS `~/Library/Logs/reachy-signals/events.jsonl`, Windows `%LOCALAPPDATA%\reachy-signals\Logs\events.jsonl`. Rotated at 10 MB, keeping one backup.
 
@@ -109,6 +111,10 @@ At startup `serve` checks that every configured move exists and warns about unkn
 
 After a gesture the robot is left awake, even if the bridge woke it (open question below).
 
+**A `/reachy` command's own turn doesn't react.** A `started` whose prompt is `/reachy` or `/reachy-signals:reachy`, and the `done` that ends that session's turn, are logged with decision `control` and don't move the robot.
+
+**`try`** plays the reaction a real event would get right now: quiet reactions in quiet mode, a random pick from the list, the robot left alone if another app holds it. It ignores the master switch and source modes, because it's an explicit request, and it doesn't start a blocked episode or supersede real events. It waits up to 30 s behind other gestures.
+
 The bridge is also the only path to the robot for the CLI: `try` asks the bridge to play a reaction, and `status` asks the bridge for robot state. Neither calls the daemon itself.
 
 ## Settings
@@ -129,16 +135,21 @@ reachy-signals serve                 run the bridge
 reachy-signals on | off              master switch
 reachy-signals quiet [on|off]        quiet mode
 reachy-signals source <name> <mode>  drive | shadow | off
-reachy-signals status                settings, robot state, blocked sessions (asks the bridge)
+reachy-signals status [--json]       settings, robot state, blocked sessions (asks the bridge)
 reachy-signals emit <event> ...      used by adapters; reads hook JSON from stdin
-reachy-signals try <event>           play the configured reaction now (through the bridge)
+reachy-signals try <event>           play the configured reaction now (through the bridge);
+                                     started | done | blocked | escalation
+reachy-signals paths                 settings file and event log locations
 ```
+
+`on`, `off`, `quiet on|off` and `source` edit the settings file with `tomlkit`, keeping comments and layout. A change is validated with the bridge's own parser before it's saved, and saved atomically, so hot reload never sees a broken file. An already invalid file is never edited: fix it by hand first. If the file doesn't exist, it's created with just the changed key. `status` and `try` exit 1 when the bridge isn't running.
 
 ## Claude Code plugin
 
 - Hooks for `UserPromptSubmit`, `Stop`, `Notification` (matcher `permission_prompt|elicitation_dialog`), each calling `reachy-signals emit` directly with `"async": true`. No bash or `curl`, so the same hook works in zsh and PowerShell. On Windows, shell-form hooks run in Git Bash, or in PowerShell when Git Bash isn't installed. The uv-installed launcher is a real `.exe`, so it runs in either.
 - The plugin is laid out as `.claude-plugin/plugin.json`, `hooks/hooks.json` and `skills/reachy/SKILL.md` ([plugin components](https://code.claude.com/docs/en/plugins/components.md)).
-- Slash command: a skill, so its full name is `/reachy-signals:reachy` with arguments `on`, `off`, `quiet`, `status`, passed through to the CLI. To verify: whether the short `/reachy` also works.
+- Slash command: the skill `skills/reachy/SKILL.md`, full name `/reachy-signals:reachy`, with arguments `on`, `off`, `quiet [on|off]`, `status`, passed through to the CLI. Because its frontmatter sets `name: reachy`, the bare `/reachy` works too, unless another command already uses that name ([skills](https://code.claude.com/docs/en/skills.md), verified 2026-11-14). `disable-model-invocation: true`: Claude never toggles the robot by itself. `allowed-tools: Bash(reachy-signals *)` runs the command without a permission prompt.
+- Claude Code installs a plugin from the marketplace repo's last commit into a cache. A plugin change takes effect after it's committed, the version in `plugin.json` is bumped, and the plugin is updated (`claude plugin update`).
 - Installing the plugin never needs to be undone to silence the robot. That is what settings are for.
 
 ## Platforms
@@ -166,5 +177,5 @@ From a real session on 2026-11-14 (Claude Code 2.1.325, macOS, `permission_mode:
 - **Payload fields match the docs** for `UserPromptSubmit` (`session_id`, `cwd`, `hook_event_name`, `permission_mode`, `prompt`), `Stop` (`stop_hook_active`) and `PreToolUse` / `PostToolUse` (`tool_name`). `Notification` and `PermissionRequest` have not been observed yet, so the `blocked` path is still unverified against real payloads.
 - **Esc mid-task sends nothing.** An interrupted turn shows as `started` followed by the next prompt's `started`, with no `done` and no other hook in between. So an interrupt is invisible until the next prompt. That's harmless for `started`/`done`; for `blocked` it's the open question above.
 - **Latency:** an event reaches the bridge ~40 ms after the hook fires.
-- Whether `started` on every prompt is too much even with a 2-second nod; possibly debounce per session, and ignore `UserPromptSubmit` that isn't a human prompt (e.g. `/reachy` itself, `/loop` iterations).
+- Whether `started` on every prompt is too much even with a 2-second nod; possibly debounce per session, and ignore `UserPromptSubmit` that isn't a human prompt (e.g. `/loop` iterations). `/reachy` itself is already ignored.
 - Whether to put the robot back to sleep after a gesture if the bridge woke it.

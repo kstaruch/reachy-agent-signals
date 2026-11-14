@@ -2,7 +2,7 @@
 
 My Reachy Mini Lite physically signals when any of my coding-agent sessions starts a task, finishes it, or is blocked waiting for me, so I can look away from the terminal without missing anything.
 
-> **Status:** in development. Milestone 4: Claude Code events make the robot react; control commands (`on`/`off`, `quiet`, `status`, `try`) come next. The design is in [`docs/spec.md`](docs/spec.md); progress is tracked as one [GitHub issue per milestone](https://github.com/kstaruch/reachy-agent-signals/issues).
+> **Status:** in development. Milestone 5: Claude Code events make the robot react, and the control commands and `/reachy` work. Windows verification comes next. The design is in [`docs/spec.md`](docs/spec.md); progress is tracked as one [GitHub issue per milestone](https://github.com/kstaruch/reachy-agent-signals/issues).
 
 ## How it works
 
@@ -56,7 +56,24 @@ claude plugin install reachy-signals@reachy-agent-signals
 
 Start a new Claude Code session from a terminal where `reachy-signals` is on `PATH`; hooks use that terminal's `PATH`. Each prompt, finish and permission prompt then makes the robot react, and shows up in the `serve` output and in the event log. The robot only moves when the daemon is running and no app holds it. To try it without moving the robot, point `daemon_url` in the settings file at the simulated daemon (`http://127.0.0.1:8001/api`, see Development).
 
-- While working on the plugin itself: `claude --plugin-dir ./plugin`, then `/reload-plugins` after edits. A marketplace install runs from a cached copy.
+### Control
+
+```bash
+reachy-signals status              # bridge, settings in effect, robot, blocked sessions
+reachy-signals off                 # robot stays still; events are still logged
+reachy-signals on
+reachy-signals quiet on            # use [quiet.reactions]; `quiet` alone shows the state
+reachy-signals source herdr shadow # drive | shadow (log only) | off
+reachy-signals try done            # play the done reaction now (started, done, blocked, escalation)
+```
+
+In Claude Code: `/reachy on`, `/reachy off`, `/reachy quiet on`, `/reachy status` (full name `/reachy-signals:reachy`). A `/reachy` turn doesn't make the robot react.
+
+Commands that change settings edit the settings file, keeping your comments, and the running bridge applies the change within about a second. `try` works while reactions are off, uses the quiet reactions in quiet mode, and doesn't move a robot another app holds.
+
+After pulling plugin changes, update the installed copy: `claude plugin marketplace update reachy-agent-signals`, then `claude plugin update reachy-signals@reachy-agent-signals`, and start a new session. Claude Code installs the plugin from the repo's last commit, not the working tree.
+
+- While working on the plugin itself: `claude --plugin-dir ./plugin`, then `/reload-plugins` after edits. A marketplace install runs from a cached copy of the last commit.
 - `/hooks` in Claude Code lists the plugin's hooks. `claude --debug` shows each hook run with its exit status.
 - `REACHY_SIGNALS_DEBUG=1` makes `emit` print why it failed. Normally it is silent and always exits 0.
 - `REACHY_SIGNALS_CONFIG` and `REACHY_SIGNALS_LOG_DIR` override the settings file and log directory, e.g. for a test bridge.
