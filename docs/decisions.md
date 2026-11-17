@@ -44,3 +44,14 @@ Claude Code's `Notification` hook fires for several types. Only `permission_prom
 ## D9 — Minimal runtime dependencies
 
 `emit` starts a fresh Python process on every hook, so import time is latency on every prompt. Runtime dependencies are `platformdirs` (settings path) and `tomlkit` (editing the settings file without losing comments). Reading TOML uses stdlib `tomllib`, and HTTP to the bridge and the daemon uses stdlib `urllib`. No web framework, no HTTP client library, no file-watcher library: hot reload polls the file's modification time.
+
+## D10 — The bridge can run on another machine; the tailnet is the boundary
+
+The robot moved to a dedicated always-on host next to the desk (a 64-bit Raspberry Pi), so the agents run on other machines. Reversing the v1 scope line "event sources on a different machine from the robot":
+
+- **The bridge still binds `127.0.0.1` only.** It's published with `tailscale serve`, which proxies HTTPS from the tailnet to localhost and never reaches the public internet (that would be Funnel). Tailnet membership is the authentication, so there is no token to distribute or rotate. The JSON content-type rule still stops browser pages from posting without a CORS preflight.
+- **Clients name the bridge with `bridge.url`.** Empty (the default) keeps everything local, exactly as before. Set, `emit`, `status` and `try` go there.
+- **Settings stay in one file, on the bridge machine.** With `bridge.url` set, `on`, `off`, `quiet` and `source` send the change to `POST /settings`, and the bridge applies it to its own file with the same validated, atomic edit (`edit.update`). A client's own settings file holds only `bridge.url`; nothing else in it is used.
+- **`emit` keeps its 0.5 s budget.** Over a direct tailnet path the round trip is a few milliseconds plus a TLS handshake. When the bridge machine is off, hooks give up in 0.5 s and exit 0, as with a stopped local bridge.
+
+Rejected: binding the bridge to the tailnet address with a shared token (a secret on every client, and the bridge would need to know which interface to bind); an SSH tunnel per client (no code change, but `on`/`off`/`quiet` would silently edit the client's own file).

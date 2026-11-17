@@ -56,6 +56,17 @@ class BridgeSettings:
     port: int = 8765
     daemon_url: str = "http://127.0.0.1:8000/api"
     max_event_age: float = 10.0  # seconds
+    url: str = ""  # clients only: a bridge on another machine; empty = this machine
+
+    @property
+    def remote(self) -> bool:
+        """True when clients talk to a bridge elsewhere (``url`` set), not a local one."""
+        return bool(self.url)
+
+    @property
+    def client_url(self) -> str:
+        """Base URL the CLI and adapters use to reach the bridge."""
+        return self.url or f"http://127.0.0.1:{self.port}"
 
 
 @dataclass(frozen=True)
@@ -178,7 +189,7 @@ def _reactions(data: Mapping[str, Any], prefix: str) -> Reactions:
 
 
 def _bridge(data: Mapping[str, Any]) -> BridgeSettings:
-    _warn_unknown(data, {"port", "daemon_url", "max_event_age"}, "bridge.")
+    _warn_unknown(data, {"port", "daemon_url", "max_event_age", "url"}, "bridge.")
     d = BridgeSettings()
     port = data.get("port", d.port)
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
@@ -188,7 +199,17 @@ def _bridge(data: Mapping[str, Any]) -> BridgeSettings:
         raise SettingsError(f"bridge.daemon_url: expected an http(s) URL, got {url!r}")
     age = data.get("max_event_age")
     max_age = d.max_event_age if age is None else parse_duration(age, "bridge.max_event_age")
-    return BridgeSettings(port=port, daemon_url=url.rstrip("/"), max_event_age=max_age)
+    bridge_url = data.get("url", d.url)
+    if not isinstance(bridge_url, str) or (
+        bridge_url and not bridge_url.startswith(("http://", "https://"))
+    ):
+        raise SettingsError(f'bridge.url: expected an http(s) URL or "", got {bridge_url!r}')
+    return BridgeSettings(
+        port=port,
+        daemon_url=url.rstrip("/"),
+        max_event_age=max_age,
+        url=bridge_url.rstrip("/"),
+    )
 
 
 def _sources(data: Mapping[str, Any]) -> Mapping[str, str]:

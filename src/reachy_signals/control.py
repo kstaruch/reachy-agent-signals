@@ -1,6 +1,8 @@
 """CLI control commands: on/off, quiet, source, status, try.
 
 Settings changes edit the file (edit.py); the bridge picks them up by hot reload.
+With ``bridge.url`` set the bridge runs on another machine: changes are sent to it
+(``POST /settings``) and it edits its own file the same way.
 ``status`` and ``try`` ask the bridge: the CLI never calls the daemon itself.
 """
 
@@ -9,11 +11,10 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from datetime import datetime
 from typing import Any
 
 from . import edit
-from .settings import Settings, SettingsError, config_path, load, quiet_active
+from .settings import BridgeSettings, SettingsError, config_path, load
 
 STATUS_TIMEOUT = 8.0  # the bridge asks the daemon, with 2 s timeouts
 TRY_TIMEOUT = 60.0  # may wait behind a long gesture, then wake the robot, then play
@@ -23,18 +24,19 @@ class BridgeDown(Exception):
     pass
 
 
-def _port() -> int:
+def _bridge() -> BridgeSettings:
     try:
-        return load().bridge.port
+        return load().bridge
     except SettingsError:
-        return 8765
+        return BridgeSettings()
 
 
 def bridge_request(path: str, body: Any = None, timeout: float = STATUS_TIMEOUT) -> dict[str, Any]:
-    port = _port()
+    bridge = _bridge()
+    url = bridge.client_url
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}{path}",
+        f"{url}{path}",
         data=data,
         headers={"Content-Type": "application/json"} if data else {},
         method="POST" if data else "GET",
@@ -53,24 +55,37 @@ def bridge_request(path: str, body: Any = None, timeout: float = STATUS_TIMEOUT)
             msg = ""
         raise BridgeDown(f"bridge answered HTTP {e.code} {msg}".strip()) from e
     except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
-        raise BridgeDown(
-            f"bridge not running on 127.0.0.1:{port} (start it with `reachy-signals serve`)"
-        ) from e
+        hint = (
+            "is the bridge machine on and on the network?"
+            if bridge.remote
+            else "start it with `reachy-signals serve`"
+        )
+        raise BridgeDown(f"bridge not reachable at {url} ({hint})") from e
 
 
 # --- settings changes ---------------------------------------------------------
 
 
-def _apply(change: Any) -> Settings | None:
+def _summary(s: Any) -> dict[str, Any]:
+    from .bridge import settings_summary
+
+    return settings_summary(s, config_path())
+
+
+def _apply(key: str, value: Any, change: Any) -> dict[str, Any] | None:
+    """Make one settings change: in the local file, or on a remote bridge. Returns the
+    resulting settings summary, or None after printing the error."""
     try:
-        return edit.update(change)
-    except SettingsError as e:
+        if _bridge().remote:
+            return bridge_request("/settings", {key: value})["settings"]
+        return _summary(edit.update(change))
+    except (SettingsError, BridgeDown) as e:
         print(f"error: {e}")
         return None
 
 
 def set_enabled(value: bool) -> int:
-    if _apply(edit.set_enabled(value)) is None:
+    if _apply("enabled", value, edit.set_enabled(value)) is None:
         return 1
     if value:
         print("Reactions on: the robot reacts to agent events.")
@@ -82,37 +97,42 @@ def set_enabled(value: bool) -> int:
 def quiet(value: bool | None) -> int:
     if value is None:
         try:
-            s = load()
-        except SettingsError as e:
+            s = bridge_request("/status")["settings"] if _bridge().remote else _summary(load())
+        except (SettingsError, BridgeDown) as e:
             print(f"error: {e}")
             return 1
     else:
-        s = _apply(edit.set_quiet(value))
+        try:
+            change = edit.set_quiet(value)
+        except SettingsError as e:  # pragma: no cover - set_quiet takes any bool
+            print(f"error: {e}")
+            return 1
+        s = _apply("quiet", value, change)
         if s is None:
             return 1
-    print(f"Quiet mode: {_quiet_line(s)}")
-    if value is False and quiet_active(s):
+    print(f"Quiet mode: {_quiet_line(s['quiet'])}")
+    if value is False and s["quiet"]["active"]:
         print("(still on: the current time is inside a quiet.schedule range)")
     return 0
 
 
 def source(name: str, mode: str) -> int:
-    s = _apply(edit.set_source(name, mode))
-    if s is None:
+    try:
+        change = edit.set_source(name, mode)
+    except SettingsError as e:
+        print(f"error: {e}")
+        return 1
+    if _apply("source", {"name": name, "mode": mode}, change) is None:
         return 1
     print(f"Source {name}: {mode}")
     return 0
 
 
-def _quiet_line(s: Settings) -> str:
-    sched = ", ".join(f"{r.start:%H:%M}-{r.end:%H:%M}" for r in s.quiet.schedule)
-    if s.quiet.enabled:
-        state = "on (manual)"
-    elif quiet_active(s, datetime.now()):
-        state = "on (schedule)"
-    else:
-        state = "off"
-    return f"{state}{f'  schedule {sched}' if sched else ''}"
+def _quiet_line(q: dict[str, Any]) -> str:
+    """``q`` is the ``quiet`` part of a settings summary."""
+    state = "on (manual)" if q["enabled"] else "on (schedule)" if q["active"] else "off"
+    sched = f"  schedule {', '.join(q['schedule'])}" if q["schedule"] else ""
+    return f"{state}{sched}"
 
 
 # --- through the bridge ---------------------------------------------------------
@@ -124,6 +144,7 @@ def status(as_json: bool = False) -> int:
         local = load()
     except SettingsError as e:
         local, file_error = None, str(e)
+    remote = local is not None and local.bridge.remote
     try:
         st = bridge_request("/status")
     except BridgeDown as e:
@@ -131,9 +152,9 @@ def status(as_json: bool = False) -> int:
             print(json.dumps({"ok": False, "error": str(e), "settings_error": file_error}))
             return 1
         print(f"bridge:    {e}")
-        if local is not None:
+        if local is not None and not remote:
             print(f"reactions: {'on' if local.enabled else 'off'}  (from the settings file)")
-            print(f"quiet:     {_quiet_line(local)}")
+            print(f"quiet:     {_quiet_line(_summary(local)['quiet'])}")
             print(f"sources:   {_sources_line(local.sources)}")
         _print_settings_file(file_error)
         return 1
@@ -142,12 +163,10 @@ def status(as_json: bool = False) -> int:
         return 0
     s = st["settings"]
     counts = ", ".join(f"{k} {v}" for k, v in sorted(st.get("events", {}).items())) or "none yet"
-    print(f"bridge:    running since {st['started_at'][11:19]} UTC  (events: {counts})")
+    where = f"  at {local.bridge.url}" if remote else ""
+    print(f"bridge:    running since {st['started_at'][11:19]} UTC{where}  (events: {counts})")
     print(f"reactions: {'on' if s['enabled'] else 'off  (turn on: reachy-signals on)'}")
-    q = s["quiet"]
-    state = "on (manual)" if q["enabled"] else "on (schedule)" if q["active"] else "off"
-    sched = f"  schedule {', '.join(q['schedule'])}" if q["schedule"] else ""
-    print(f"quiet:     {state}{sched}")
+    print(f"quiet:     {_quiet_line(s['quiet'])}")
     print(f"sources:   {_sources_line(s['sources'])}")
     print(f"robot:     {_robot_line(st['robot'])}")
     if st.get("playing"):
@@ -163,6 +182,8 @@ def status(as_json: bool = False) -> int:
             )
     else:
         print("blocked:   none")
+    if remote:
+        print(f"settings:  {s['path']}  (on the bridge machine)")
     _print_settings_file(file_error)
     return 0
 
@@ -191,7 +212,8 @@ def _robot_line(r: dict[str, Any]) -> str:
 
 def _print_settings_file(error: str | None) -> None:
     path = config_path()
-    print(f"settings:  {path}{'' if path.exists() else '  (not created yet: defaults)'}")
+    label = "client:   " if _bridge().remote else "settings: "
+    print(f"{label} {path}{'' if path.exists() else '  (not created yet: defaults)'}")
     if error:
         print(f"           error: {error}")
         print("           the bridge keeps using the last valid settings")

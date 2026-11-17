@@ -19,12 +19,12 @@ A coding-agent session reaching one of three moments makes the robot react, so t
 - `reachy-signals` CLI.
 - Claude Code plugin (hooks and a `/reachy` slash command).
 - macOS first, then verified on Windows.
+- Bridge on another machine than the agents, reached over the tailnet ([D10](decisions.md#d10--the-bridge-can-run-on-another-machine-the-tailnet-is-the-boundary)).
 
 **Not in v1** (designed for, not built)
 
 - Starting the bridge automatically at login (launchd / Task Scheduler). In v1 you run `reachy-signals serve` yourself.
 - herdr event source. Planned next, starting in shadow mode. See [herdr.md](herdr.md).
-- Event sources on a different machine from the robot.
 - Automatic quiet mode from OS focus / do-not-disturb state.
 - Voice in either direction.
 
@@ -43,6 +43,7 @@ A coding-agent session reaching one of three moments makes the robot react, so t
 
 - **One process drives the robot.** Adapters never call the daemon. The daemon also serves other apps, and two controllers fight over the motors.
 - **Bridge listens on localhost TCP.** Not a Unix socket: Windows support. Port is a setting.
+- **Bridge on another machine.** When the robot hangs off a separate host, the bridge runs there, still on localhost, published to the tailnet with `tailscale serve`. Clients set `bridge.url`; see *Remote bridge* below.
 - **Adapters fail fast and silently.** If the bridge is down, `emit` gives up after a short timeout and exits 0. A robot problem must never hold up an agent session.
 
 ## Events in, reactions out
@@ -71,6 +72,7 @@ Bridge HTTP endpoints on `127.0.0.1:<bridge.port>`:
 - `GET /health`: liveness, counts per decision, event log path, what's playing and pending, blocked sessions.
 - `GET /status`: `/health` plus the settings in effect and robot state (daemon reachable, motor mode, app lock). Used by `reachy-signals status`.
 - `POST /try`: `{"event": "started" | "done" | "blocked" | "escalation"}`. Plays that reaction and answers with the outcome when it's done. Used by `reachy-signals try`.
+- `POST /settings`: exactly one of `{"enabled": bool}`, `{"quiet": bool}`, `{"source": {"name": ..., "mode": ...}}`. Applies it to the bridge's own settings file with the CLI's validated, atomic edit and answers `200 {"settings": ...}` (the `settings` part of `/status`), or `422 {"error": ...}` for a bad request or an already invalid file. Used by the CLI when `bridge.url` is set.
 
 Event log: one JSON line per event received, with the bridge's `decision`. macOS `~/Library/Logs/reachy-signals/events.jsonl`, Windows `%LOCALAPPDATA%\reachy-signals\Logs\events.jsonl`. Rotated at 10 MB, keeping one backup.
 
@@ -128,6 +130,16 @@ Full sketch: [`config.example.toml`](../config.example.toml). Sections: master `
 
 The bridge reloads the file on change. All control surfaces edit the file through the CLI, so there is one source of truth.
 
+### Remote bridge
+
+`[bridge] url` is read by clients only. Empty (default): the bridge is `http://127.0.0.1:<bridge.port>` and the CLI edits the local file. Set, for example `https://<host>.<tailnet>.ts.net:8765`:
+
+- `emit`, `status` and `try` use that URL.
+- `on`, `off`, `quiet [on|off]` and `source` send the change to the bridge (`POST /settings`); the file that changes is the one on the bridge machine. `quiet` alone shows the settings in effect there.
+- Nothing else in the client's file is used. A client file is typically just `[bridge]` and `url`.
+
+On the bridge machine: `tailscale serve --bg --https=8765 http://127.0.0.1:8765`. Tailnet only; never Funnel.
+
 ## CLI
 
 ```
@@ -158,7 +170,7 @@ reachy-signals paths                 settings file and event log locations
 |---|---|
 | Language | Python 3.12, one package, `uv tool install` |
 | Settings path | `platformdirs` |
-| Bridge transport | localhost TCP |
+| Bridge transport | localhost TCP; another machine via `tailscale serve` (D10) |
 | Hook commands | the CLI, never a shell script |
 | OS-specific features (focus state, later audio) | small per-platform interface with a no-op fallback |
 

@@ -127,7 +127,7 @@ def test_status_bridge_down(tmp_path, capsys):
     (tmp_path / "config.toml").write_text(f"[bridge]\nport = {free_port()}\n", encoding="utf-8")
     assert main(["status"]) == 1
     out = capsys.readouterr().out
-    assert "bridge not running" in out and "reactions: on  (from the settings file)" in out
+    assert "bridge not reachable" in out and "reactions: on  (from the settings file)" in out
 
 
 def test_try_plays_and_reports(live, capsys):
@@ -170,7 +170,7 @@ def test_try_leaves_no_blocked_session(live):
 def test_try_bridge_down(tmp_path, capsys):
     (tmp_path / "config.toml").write_text(f"[bridge]\nport = {free_port()}\n", encoding="utf-8")
     assert main(["try", "done"]) == 1
-    assert "bridge not running" in capsys.readouterr().out
+    assert "bridge not reachable" in capsys.readouterr().out
 
 
 def test_settings_file_round_trip_through_cli(live):

@@ -71,6 +71,40 @@ In Claude Code: `/reachy on`, `/reachy off`, `/reachy quiet on`, `/reachy status
 
 Commands that change settings edit the settings file, keeping your comments, and the running bridge applies the change within about a second. `try` works while reactions are off, uses the quiet reactions in quiet mode, and doesn't move a robot another app holds.
 
+### Robot on another machine
+
+The robot can hang off a separate always-on host (for example a 64-bit Raspberry Pi next to the desk) while the agents run on your laptop or desktop. The daemon and the bridge run on that host; the bridge stays on localhost and is published to your [tailnet](https://tailscale.com/kb/1312/serve) only ([D10](docs/decisions.md#d10--the-bridge-can-run-on-another-machine-the-tailnet-is-the-boundary)).
+
+On the robot host:
+
+```bash
+reachy-signals serve                                    # or as a service, see below
+sudo tailscale serve --bg --https=8765 http://127.0.0.1:8765
+```
+
+On each machine where agents run, the settings file needs only the bridge's address (`reachy-signals paths` shows where it is):
+
+```toml
+[bridge]
+url = "https://<host>.<tailnet>.ts.net:8765"
+```
+
+Hooks, `status` and `try` then go to that bridge, and `on`, `off`, `quiet` and `source` change the settings file on the robot host. On Linux, a systemd user unit keeps the bridge running (`loginctl enable-linger` starts it at boot):
+
+```ini
+# ~/.config/systemd/user/reachy-signals.service
+[Unit]
+Description=reachy-agent-signals bridge
+After=reachy-daemon.service
+
+[Service]
+ExecStart=%h/.local/bin/reachy-signals serve
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
 After pulling plugin changes, update the installed copy: `claude plugin marketplace update reachy-agent-signals`, then `claude plugin update reachy-signals@reachy-agent-signals`, and start a new session. Claude Code installs the plugin from the repo's last commit, not the working tree.
 
 - While working on the plugin itself: `claude --plugin-dir ./plugin`, then `/reload-plugins` after edits. A marketplace install runs from a cached copy of the last commit.

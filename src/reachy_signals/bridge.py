@@ -21,7 +21,7 @@ from . import policy
 from .eventlog import EventLog
 from .events import Event, EventError, now_iso
 from .reactor import Reactor
-from .settings import quiet_active
+from .settings import Settings, SettingsError, quiet_active
 from .watch import SettingsWatcher
 
 log = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ MAX_BODY = 64_000
 # `/reachy status` shouldn't nod and cheer.
 CONTROL_COMMANDS = ("/reachy", "/reachy-signals:reachy")
 TRY_KINDS = ("started", "done", "blocked", "escalation")
+SETTINGS_KEYS = ("enabled", "quiet", "source")
 
 
 class Bridge:
@@ -100,19 +101,32 @@ class Bridge:
         s = self.watcher.current()
         return {
             **self.health(),
-            "settings": {
-                "path": str(self.watcher.path),
-                "enabled": s.enabled,
-                "quiet": {
-                    "enabled": s.quiet.enabled,
-                    "active": quiet_active(s),
-                    "schedule": [_fmt_range(r) for r in s.quiet.schedule],
-                },
-                "sources": dict(s.sources),
-                "reactions": _reactions_dict(s.quiet.reactions if quiet_active(s) else s.reactions),
-            },
+            "settings": settings_summary(s, self.watcher.path),
             "robot": robot_state(s.bridge.daemon_url),
         }
+
+    def change_settings(self, body: Any) -> dict[str, Any]:
+        """Apply one CLI settings change to this bridge's own file (clients on other machines).
+
+        Same validated, atomic edit as the local CLI; hot reload picks it up. Raises
+        SettingsError for a bad request or a file that's invalid already.
+        """
+        from . import edit
+
+        if not isinstance(body, dict) or len(body) != 1 or next(iter(body)) not in SETTINGS_KEYS:
+            raise SettingsError(f"expected exactly one of {', '.join(SETTINGS_KEYS)}")
+        ((key, value),) = body.items()
+        if key == "source":
+            if not isinstance(value, dict) or set(value) != {"name", "mode"}:
+                raise SettingsError('source: expected {"name": ..., "mode": ...}')
+            change = edit.set_source(str(value["name"]), str(value["mode"]))
+        elif not isinstance(value, bool):
+            raise SettingsError(f"{key}: expected true or false, got {value!r}")
+        else:
+            change = edit.set_enabled(value) if key == "enabled" else edit.set_quiet(value)
+        new = edit.update(change, self.watcher.path)
+        log.info("settings changed by a client: %s = %s", key, value)
+        return settings_summary(new, self.watcher.path)
 
     def try_reaction(self, kind: str) -> dict[str, Any]:
         if self.reactor is None:
@@ -145,6 +159,21 @@ def robot_state(daemon_url: str) -> dict[str, Any]:
     }
 
 
+def settings_summary(s: Settings, path: Path) -> dict[str, Any]:
+    """The settings a client shows: `status`, and the answer to a settings change."""
+    return {
+        "path": str(path),
+        "enabled": s.enabled,
+        "quiet": {
+            "enabled": s.quiet.enabled,
+            "active": quiet_active(s),
+            "schedule": [_fmt_range(r) for r in s.quiet.schedule],
+        },
+        "sources": dict(s.sources),
+        "reactions": _reactions_dict(s.quiet.reactions if quiet_active(s) else s.reactions),
+    }
+
+
 def _fmt_range(r: Any) -> str:
     return f"{r.start:%H:%M}-{r.end:%H:%M}"
 
@@ -174,7 +203,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path not in ("/events", "/try"):
+        if self.path not in ("/events", "/try", "/settings"):
             self._reply(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         body = self._json_body()
@@ -188,6 +217,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             decision = self.server.bridge.handle(event)
             self._reply(HTTPStatus.ACCEPTED, {"decision": decision})
+            return
+        if self.path == "/settings":
+            try:
+                summary = self.server.bridge.change_settings(body)
+            except SettingsError as e:
+                self._reply(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": str(e)})
+                return
+            self._reply(HTTPStatus.OK, {"settings": summary})
             return
         kind = body.get("event") if isinstance(body, dict) else None
         if kind not in TRY_KINDS:

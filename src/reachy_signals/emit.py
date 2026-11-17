@@ -41,18 +41,22 @@ def _read_stdin(timeout: float = STDIN_TIMEOUT) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _bridge_port() -> int:
+DEFAULT_URL = "http://127.0.0.1:8765"
+
+
+def _bridge_url() -> str:
+    """``bridge.url`` if set (bridge on another machine), else localhost on ``bridge.port``."""
     try:
         from .settings import load
 
-        return load().bridge.port
+        return load().bridge.client_url
     except Exception:
-        return 8765
+        return DEFAULT_URL
 
 
-def post(event: Event, port: int, timeout: float = POST_TIMEOUT) -> bool:
+def post(event: Event, url: str, timeout: float = POST_TIMEOUT) -> bool:
     req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/events",
+        f"{url}/events",
         data=json.dumps(event.to_dict()).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -85,7 +89,7 @@ def run(argv: list[str]) -> None:
         "detail": args.detail,
     }
     ev = Event(**{**ev.to_dict(), **{k: v for k, v in overrides.items() if v is not None}})
-    post(ev, _bridge_port())
+    post(ev, _bridge_url())
 
 
 def main(argv: list[str]) -> int:
