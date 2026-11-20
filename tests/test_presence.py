@@ -27,7 +27,7 @@ def test_presence_defaults_keep_old_behaviour():
     assert s.presence.sleep_after == 120.0
     assert s.presence.missed_events == ("done", "blocked")
     assert s.presence.detector == DetectorSettings()
-    assert s.reactions.missed == ("inquiring1",) and s.quiet.reactions.missed == ("inquiring1",)
+    assert s.reactions.missed == ("curious1",) and s.quiet.reactions.missed == ("curious1",)
 
 
 def test_presence_settings_parse():
@@ -330,8 +330,8 @@ def test_missed_reaction_after_wake(make):
     agent(r, "done", policy.ASLEEP)  # the bridge decides ASLEEP while asleep
     agent(r, "done", policy.ASLEEP, session="s2")
     phone(r, "near")
-    assert until(lambda: "inquiring1" in fake.played)
-    assert fake.played == ["goto_sleep", "wake_up", "inquiring1"]  # once, not per event
+    assert until(lambda: "curious1" in fake.played)
+    assert fake.played == ["goto_sleep", "wake_up", "curious1"]  # once, not per event
     assert fake.motor_mode == "enabled"
     wake = [x for x in records(log, "presence") if x["action"] == "wake"]
     assert wake[-1]["missed"] is True
@@ -368,9 +368,9 @@ def test_blocked_session_at_sleep_is_missed_and_not_escalated(make):
     time.sleep(1.0)  # the escalation would be due by now
     assert "toc-toc-toc" not in fake.played
     phone(r, "near")
-    assert until(lambda: "inquiring1" in fake.played)
+    assert until(lambda: "curious1" in fake.played)
     time.sleep(0.3)
-    assert fake.played == ["attentive1", "goto_sleep", "wake_up", "inquiring1"]
+    assert fake.played == ["attentive1", "goto_sleep", "wake_up", "curious1"]
 
 
 def test_try_while_asleep_plays_then_sleeps_again(make):
@@ -390,7 +390,7 @@ def test_try_missed(make):
     result = r.try_reaction("missed", timeout=5)
     assert (result["outcome"], result["move"], result["reaction"]) == (
         "played",
-        "inquiring1",
+        "curious1",
         "missed",
     )
 

@@ -34,13 +34,13 @@ schedule = []                   # local time, e.g. ["22:00-08:00"]; ranges may c
 started = ["yeah_nod"]
 done    = ["cheerful1"]
 blocked = ["attentive1"]
-missed  = ["inquiring1"]        # after waking up, when something was missed (presence)
+missed  = ["curious1"]        # after waking up, when something was missed (presence)
 
 [quiet.reactions]               # used instead of [reactions] while quiet mode is on
 started = ["yeah_nod"]          # placeholder: same as normal until silent moves are picked
 done    = ["cheerful1"]         # placeholder: has sound
 blocked = ["attentive1"]        # placeholder: has sound
-missed  = ["inquiring1"]        # placeholder: not yet watched
+missed  = ["curious1"]        # placeholder: sound not checked yet
 
 [escalation]                    # still blocked after this long → play once
 blocked_after = "3m"

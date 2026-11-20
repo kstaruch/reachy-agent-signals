@@ -48,7 +48,7 @@ class Reactions:
     started: tuple[str, ...] = ("yeah_nod",)
     done: tuple[str, ...] = ("cheerful1",)
     blocked: tuple[str, ...] = ("attentive1",)
-    missed: tuple[str, ...] = ("inquiring1",)
+    missed: tuple[str, ...] = ("curious1",)
 
     def for_event(self, event: str) -> tuple[str, ...]:
         """Reaction list for an event name or ``missed``."""

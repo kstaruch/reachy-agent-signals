@@ -52,7 +52,8 @@ Wall-clock from play request until `/api/move/running` was empty. The lower boun
 | `enthusiastic1` | emotions | 4.6 s | |
 | `attentive1` | emotions | 5.5–6.3 s | yes |
 | `toc-toc-toc` | emotions | 14.9 s | |
-| `inquiring1` | emotions | 4.3 s | |
+| `inquiring1` | emotions | 2.7–4.3 s | |
+| `curious1` | emotions | 12.6 s | |
 | `impatient1` | emotions | 5.5 s | |
 | `waiting` | emotions | 10.9 s | |
 | `understanding1` | emotions | 5.7 s | |

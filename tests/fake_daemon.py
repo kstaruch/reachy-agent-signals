@@ -22,7 +22,7 @@ LIBRARIES = {
         "cheerful1",
         "attentive1",
         "toc-toc-toc",
-        "inquiring1",
+        "curious1",
     },
     "pollen-robotics/reachy-mini-dances-library": {"yeah_nod", "simple_nod"},
 }

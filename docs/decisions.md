@@ -67,5 +67,6 @@ The robot is awake only while its owner is within about 2 m: the bridge host sca
 - **Asleep, events don't queue.** Each reaction event is logged with decision `asleep` and never played later (a late reaction is misleading — same reason as `max_event_age`). If any of them is in `presence.missed_events`, one `missed` reaction plays after the wake-up. Blocked sessions don't escalate while asleep.
 - **Leaving is slow, arriving is fast.** Waking happens on the first `near`; sleeping only after `presence.sleep_after` of `away`, so a trip to the kitchen doesn't put the robot to sleep.
 - **`presence.mode` is a setting (D2):** `off` (default, as before), `auto`, `awake`, `asleep`.
+- **The `missed` reaction is `curious1`.** Picked by the owner after the first walk-away test, which played the placeholder `inquiring1`.
 
 Rejected: Wi-Fi presence (an iPhone's Wi-Fi sleeps for minutes and says nothing about the desk); iOS Shortcuts automations (home-level, not desk-level); Tailscale online status (says the phone has internet, not where it is); queueing events while asleep and replaying them on wake.
