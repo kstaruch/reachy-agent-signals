@@ -9,6 +9,7 @@ With ``bridge.url`` set the bridge runs on another machine: changes are sent to 
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -140,6 +141,13 @@ def presence(mode: str | None) -> int:
         print(f"Presence: {mode}  ({_PRESENCE_HELP[mode]})")
     try:
         st = bridge_request("/status")
+        # The bridge picks a changed file up within ~1 s (hot reload): wait for it.
+        deadline = time.monotonic() + 3.0
+        while mode is not None and (st.get("presence") or {}).get("mode") not in (mode, None):
+            if time.monotonic() > deadline:
+                break
+            time.sleep(0.25)
+            st = bridge_request("/status")
     except BridgeDown as e:
         if mode is None:
             print(f"error: {e}")
