@@ -1,6 +1,8 @@
+
 """Static checks on the Claude Code plugin files (docs/spec.md → Claude Code plugin)."""
 
 import json
+import re
 import shlex
 from pathlib import Path
 
@@ -62,3 +64,20 @@ def test_reachy_skill():
     assert fields["disable-model-invocation"] == "true"  # Claude never toggles it by itself
     assert fields["allowed-tools"] == "Bash(reachy-signals *)"
     assert "reachy-signals $ARGUMENTS" in text
+
+
+def test_reachy_skill_offers_only_real_cli_commands():
+    import argparse
+
+    from reachy_signals.cli import build_parser
+
+    text = (PLUGIN / "skills" / "reachy" / "SKILL.md").read_text(encoding="utf-8")
+    hint = next(line for line in text.splitlines() if line.startswith("argument-hint: "))
+    offered = {w for w in re.findall(r"[a-z]+", hint.split(": ", 1)[1])}
+    sub = next(a for a in build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    commands = set(sub.choices)
+    values = {"on", "off", "auto", "awake", "asleep"}  # arguments, not commands
+    assert "presence" in offered
+    assert offered - values <= commands, offered - values - commands
+    for mode in ("off", "auto", "awake", "asleep"):
+        assert f"`presence {mode}`" in text
