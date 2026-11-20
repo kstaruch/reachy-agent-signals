@@ -19,6 +19,7 @@ from . import policy
 from .daemon import DaemonClient, DaemonError, DaemonUnavailable, MoveNotFound
 from .eventlog import EventLog
 from .events import Event, now_iso
+from .presence import SLEEP, Presence
 from .scheduler import Job, Scheduler
 from .settings import Settings, quiet_active
 
@@ -35,6 +36,8 @@ LOCKED = "locked"  # an app or remote session holds the robot
 DAEMON_DOWN = "daemon-unavailable"
 UNKNOWN_MOVE = "unknown-move"
 ERROR = "error"
+ASLEEP = policy.ASLEEP  # presence has the robot asleep: not played, maybe `missed` later
+DONE = "done"  # a presence sleep/wake that happened
 
 
 class Reactor:
@@ -53,6 +56,7 @@ class Reactor:
         self._client_factory = client_factory
         self._clients: dict[str, DaemonClient] = {}
         self._sched = Scheduler()
+        self._presence = Presence()
         self._cond = threading.Condition()
         self._stopping = False
         self._thread: threading.Thread | None = None
@@ -75,12 +79,11 @@ class Reactor:
             box.update(record)
             done.set()
 
-        escalation = kind == "escalation"
-        event = Event(
-            source="cli", event="blocked" if escalation else kind, session="try", detail="try"
-        )
+        escalation, missed = kind == "escalation", kind == "missed"
+        name = "blocked" if escalation else "done" if missed else kind
+        event = Event(source="cli", event=name, session="try", detail="try")
         with self._cond:
-            self._sched.submit_manual(event, self._clock(), escalation, on_done)
+            self._sched.submit_manual(event, self._clock(), escalation, on_done, missed)
             self._cond.notify_all()
         if not done.wait(timeout):
             return {"outcome": "timeout", "reaction": kind}
@@ -88,10 +91,24 @@ class Reactor:
 
     def submit(self, event: Event, decision: str) -> None:
         with self._cond:
+            if decision == ASLEEP:
+                self._presence.note(event.event, self._settings())
             dropped = self._sched.submit(event, decision, self._clock())
             self._cond.notify_all()
         for job, reason in dropped:
             self._record(job, reason)
+
+    def on_presence(self, event: Event) -> bool:
+        """A ``near``/``away`` event from presence-watch. True if it changed anything."""
+        with self._cond:
+            changed = self._presence.observe(event.event, self._clock())
+            self._cond.notify_all()
+        return changed
+
+    def asleep(self) -> bool:
+        """True while presence has the robot asleep: reactions are not played."""
+        with self._cond:
+            return self._presence.asleep(self._settings())
 
     # --- lifecycle ----------------------------------------------------------
 
@@ -113,6 +130,7 @@ class Reactor:
                 "playing": self.current,
                 "pending": [j.kind for j in self._sched.pending],
                 "blocked_sessions": self._sched.blocked_sessions(now),
+                "presence": self._presence.summary(self._settings(), now),
             }
 
     # --- worker -------------------------------------------------------------
@@ -123,14 +141,32 @@ class Reactor:
                 if self._stopping:
                     return
                 settings = self._settings()
-                job, dropped = self._sched.pop(settings, self._clock())
-                if job is None:
-                    wake = self._sched.next_wakeup(settings)
-                    timeout = 1.0 if wake is None else max(0.0, min(1.0, wake - self._clock()))
+                now = self._clock()
+                action = self._presence.due(settings, now)
+                job, dropped = (None, []) if action else self._sched.pop(settings, now)
+                if action is None and job is None:
+                    wakes = [
+                        w
+                        for w in (
+                            self._sched.next_wakeup(settings),
+                            self._presence.next_wakeup(settings),
+                        )
+                        if w is not None
+                    ]
+                    wake = min(wakes, default=None)
+                    timeout = 1.0 if wake is None else max(0.0, min(1.0, wake - now))
                     if not dropped:
                         self._cond.wait(timeout)
             for d, reason in dropped:
                 self._record(d, reason)
+            if action is not None:
+                try:
+                    self._presence_action(action, settings)
+                except Exception as e:  # never let the worker die
+                    log.exception("presence %s failed", action)
+                    with self._cond:
+                        self._presence.failed(self._clock())
+                    self._record_presence(action, ERROR, error=str(e))
             if job is not None:
                 try:
                     self._execute(job, settings)
@@ -140,10 +176,23 @@ class Reactor:
 
     def _execute(self, job: Job, settings: Settings) -> None:
         # Settings may have changed while the job waited: check drop/pass again.
-        decision = policy.PASS if job.manual else policy.drop_or_pass(settings, job.event)
+        if job.manual:
+            decision = policy.PASS
+        elif job.missed:
+            decision = policy.PASS if settings.enabled else policy.DISABLED
+        else:
+            decision = policy.drop_or_pass(settings, job.event)
         if decision != policy.PASS:
             self._record(job, decision)
             return
+        with self._cond:
+            asleep = self._presence.asleep(settings)
+            if asleep and not job.manual:
+                # Went to sleep while this waited. `try` still plays, then sleeps again.
+                if not job.missed:
+                    self._presence.note(job.event.event, settings)
+                self._record(job, ASLEEP)
+                return
 
         names = self._reaction_names(job, settings)
         if not names:
@@ -180,7 +229,60 @@ class Reactor:
         finally:
             with self._cond:
                 self.current = None
-        self._record(job, outcome, move=move, woke=woke, seconds=round(self._clock() - started, 2))
+        extra: dict[str, Any] = {"woke": woke, "seconds": round(self._clock() - started, 2)}
+        if asleep:
+            try:
+                client.wait_idle(MOVE_TIMEOUT)
+                client.sleep()
+                extra["slept_again"] = True
+            except DaemonError as e:
+                extra["slept_again"] = False
+                extra["error"] = str(e)
+        self._record(job, outcome, move=move, **extra)
+
+    def _presence_action(self, action: str, settings: Settings) -> None:
+        """Put the robot to sleep or wake it up (presence). Runs on the worker thread."""
+        client = self._client(settings.bridge.daemon_url)
+        try:
+            lock = client.lock_status()
+            if not lock.free:
+                with self._cond:
+                    self._presence.failed(self._clock())
+                self._record_presence(action, LOCKED, holder=lock.holder or lock.state)
+                return
+            if action == SLEEP:
+                if not client.wait_idle(MOVE_TIMEOUT):
+                    raise DaemonError("robot still busy")
+                client.sleep()
+            else:
+                client.ensure_ready()
+        except DaemonUnavailable as e:
+            with self._cond:
+                self._presence.failed(self._clock())
+            self._record_presence(action, DAEMON_DOWN, error=str(e))
+            return
+        except DaemonError as e:
+            with self._cond:
+                self._presence.failed(self._clock())
+            self._record_presence(action, ERROR, error=str(e))
+            return
+
+        dropped: list[tuple[Job, str]] = []
+        with self._cond:
+            missed = self._presence.done(action)
+            if action == SLEEP:
+                dropped = self._sched.drop_all(ASLEEP)
+                for job, _ in dropped:
+                    self._presence.note("blocked" if job.escalation else job.event.event, settings)
+                if self._sched.silence_blocked():
+                    self._presence.note("blocked", settings)
+            elif missed:
+                event = Event(source="presence", event="near", session="presence")
+                self._sched.submit_missed(event, self._clock())
+            self._cond.notify_all()
+        for job, reason in dropped:
+            self._record(job, reason)
+        self._record_presence(action, DONE, **({"missed": missed} if action != SLEEP else {}))
 
     def _wait(self, client: DaemonClient, uuid: str, job: Job, settings: Settings) -> str:
         """Wait for the move to finish; stop it if a higher-priority job arrives."""
@@ -209,6 +311,8 @@ class Reactor:
 
     def _reaction_names(self, job: Job, settings: Settings) -> tuple[str, ...]:
         quiet = quiet_active(settings, datetime.now())
+        if job.missed:
+            return (settings.quiet.reactions if quiet else settings.reactions).missed
         if job.escalation:
             # In quiet mode, an empty quiet `blocked` list silences the reminder too.
             if quiet and not settings.quiet.reactions.blocked:
@@ -221,6 +325,25 @@ class Reactor:
         if url not in self._clients:
             self._clients[url] = self._client_factory(url)
         return self._clients[url]
+
+    def _record_presence(self, action: str, outcome: str, **extra: Any) -> None:
+        self._log.append(
+            {
+                "received": now_iso(),
+                "kind": "presence",
+                "action": action,
+                "outcome": outcome,
+                **extra,
+            }
+        )
+        level = logging.INFO if outcome == DONE else logging.WARNING
+        log.log(
+            level,
+            "presence %s -> %s %s",
+            action,
+            outcome,
+            " ".join(f"{k}={v}" for k, v in extra.items()),
+        )
 
     def _record(self, job: Job, outcome: str, **extra: Any) -> None:
         ev = job.event

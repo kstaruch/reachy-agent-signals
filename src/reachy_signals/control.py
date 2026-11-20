@@ -128,6 +128,50 @@ def source(name: str, mode: str) -> int:
     return 0
 
 
+def presence(mode: str | None) -> int:
+    if mode is not None:
+        try:
+            change = edit.set_presence(mode)
+        except SettingsError as e:  # pragma: no cover - argparse limits the choices
+            print(f"error: {e}")
+            return 1
+        if _apply("presence", mode, change) is None:
+            return 1
+        print(f"Presence: {mode}  ({_PRESENCE_HELP[mode]})")
+    try:
+        st = bridge_request("/status")
+    except BridgeDown as e:
+        if mode is None:
+            print(f"error: {e}")
+            return 1
+        return 0
+    print(f"Now:      {_presence_line(st.get('presence'))}")
+    return 0
+
+
+_PRESENCE_HELP = {
+    "off": "presence ignored, the robot reacts as before",
+    "auto": "awake while your phone is near, asleep after it has been away a while",
+    "awake": "kept awake whatever the phone does",
+    "asleep": "kept asleep; missed events get one reaction when it wakes",
+}
+
+
+def _presence_line(p: dict[str, Any] | None) -> str:
+    """``p`` is the ``presence`` part of the bridge's /status."""
+    if not p:
+        return "unknown (the bridge is an older version)"
+    if p["mode"] == "off":
+        return "off"
+    phone = {"near": "phone near", "away": "phone away"}.get(p["phone"], "phone not seen yet")
+    parts = [p["mode"], phone, f"robot {p['robot']}"]
+    if "sleep_in" in p:
+        parts.append(f"sleeps in {p['sleep_in']:.0f}s")
+    if p.get("missed"):
+        parts.append("missed something")
+    return ", ".join(parts)
+
+
 def _quiet_line(q: dict[str, Any]) -> str:
     """``q`` is the ``quiet`` part of a settings summary."""
     state = "on (manual)" if q["enabled"] else "on (schedule)" if q["active"] else "off"
@@ -168,7 +212,8 @@ def status(as_json: bool = False) -> int:
     print(f"reactions: {'on' if s['enabled'] else 'off  (turn on: reachy-signals on)'}")
     print(f"quiet:     {_quiet_line(s['quiet'])}")
     print(f"sources:   {_sources_line(s['sources'])}")
-    print(f"robot:     {_robot_line(st['robot'])}")
+    print(f"presence:  {_presence_line(st.get('presence'))}")
+    print(f"robot:     {_robot_line(st['robot'], st.get('presence'))}")
     if st.get("playing"):
         p = st["playing"]
         print(f"playing:   {p['move']} ({p['kind']})")
@@ -192,7 +237,7 @@ def _sources_line(sources: dict[str, str]) -> str:
     return ", ".join(f"{k} {v}" for k, v in sources.items())
 
 
-def _robot_line(r: dict[str, Any]) -> str:
+def _robot_line(r: dict[str, Any], presence: dict[str, Any] | None = None) -> str:
     if not r.get("reachable"):
         return f"daemon not reachable at {r['daemon_url']}"
     parts = []
@@ -201,6 +246,8 @@ def _robot_line(r: dict[str, Any]) -> str:
     motors = r.get("motors")
     if motors == "enabled":
         parts.append("awake")
+    elif presence and presence.get("mode") != "off" and presence.get("robot") == "asleep":
+        parts.append("asleep (presence)")
     else:
         parts.append(f"motors {motors} (the next reaction wakes it)")
     if r.get("lock") == "free":

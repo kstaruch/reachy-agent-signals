@@ -19,7 +19,11 @@ log = logging.getLogger(__name__)
 APP_NAME = "reachy-signals"
 CONFIG_ENV = "REACHY_SIGNALS_CONFIG"
 EVENTS = ("started", "done", "blocked")
+# Reaction lists in [reactions] / [quiet.reactions]: one per event, plus `missed`
+# (played after presence wakes the robot, if something arrived while it slept).
+REACTION_KINDS = (*EVENTS, "missed")
 MODES = ("drive", "shadow", "off")
+PRESENCE_MODES = ("off", "auto", "awake", "asleep")
 
 
 class SettingsError(ValueError):
@@ -44,9 +48,11 @@ class Reactions:
     started: tuple[str, ...] = ("yeah_nod",)
     done: tuple[str, ...] = ("cheerful1",)
     blocked: tuple[str, ...] = ("attentive1",)
+    missed: tuple[str, ...] = ("inquiring1",)
 
     def for_event(self, event: str) -> tuple[str, ...]:
-        if event not in EVENTS:
+        """Reaction list for an event name or ``missed``."""
+        if event not in REACTION_KINDS:
             raise KeyError(event)
         return getattr(self, event)
 
@@ -82,6 +88,25 @@ class EscalationSettings:
     blocked: tuple[str, ...] = ("toc-toc-toc",)
 
 
+@dataclass(frozen=True)
+class DetectorSettings:
+    """``[presence.detector]``: read by ``presence-watch`` on the bridge host only."""
+
+    device: str = ""  # the paired phone's Bluetooth address
+    near_rssi: int = -65
+    far_rssi: int = -70
+    window: float = 8.0  # seconds of readings the median is taken over
+    lost_after: float = 30.0  # nothing heard this long → away
+
+
+@dataclass(frozen=True)
+class PresenceSettings:
+    mode: str = "off"  # off | auto | awake | asleep
+    sleep_after: float = 120.0  # seconds away before the robot sleeps
+    missed_events: tuple[str, ...] = ("done", "blocked")
+    detector: DetectorSettings = field(default_factory=DetectorSettings)
+
+
 def _default_sources() -> Mapping[str, str]:
     return {"claude-code": "drive", "herdr": "off"}
 
@@ -94,6 +119,7 @@ class Settings:
     quiet: QuietSettings = field(default_factory=QuietSettings)
     reactions: Reactions = field(default_factory=Reactions)
     escalation: EscalationSettings = field(default_factory=EscalationSettings)
+    presence: PresenceSettings = field(default_factory=PresenceSettings)
 
     def source_mode(self, source: str) -> str:
         """Mode for a source; sources not in the file are ``off``."""
@@ -180,10 +206,11 @@ def _names(value: Any, key: str) -> tuple[str, ...]:
 
 
 def _reactions(data: Mapping[str, Any], prefix: str) -> Reactions:
-    _warn_unknown(data, set(EVENTS), prefix)
+    _warn_unknown(data, set(REACTION_KINDS), prefix)
     defaults = Reactions()
     values = {
-        e: _names(data[e], f"{prefix}{e}") if e in data else defaults.for_event(e) for e in EVENTS
+        e: _names(data[e], f"{prefix}{e}") if e in data else defaults.for_event(e)
+        for e in REACTION_KINDS
     }
     return Reactions(**values)
 
@@ -249,9 +276,71 @@ def _escalation(data: Mapping[str, Any]) -> EscalationSettings:
     )
 
 
+def _int(data: Mapping[str, Any], name: str, default: int, key: str) -> int:
+    value = data.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SettingsError(f"{key}: expected a whole number, got {value!r}")
+    return value
+
+
+def _detector(data: Mapping[str, Any]) -> DetectorSettings:
+    prefix = "presence.detector."
+    _warn_unknown(data, {"device", "near_rssi", "far_rssi", "window", "lost_after"}, prefix)
+    d = DetectorSettings()
+    device = data.get("device", d.device)
+    if not isinstance(device, str) or (
+        device and not re.fullmatch(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}", device.strip())
+    ):
+        raise SettingsError(
+            f'{prefix}device: expected a Bluetooth address like "AA:BB:CC:DD:EE:FF" or "", '
+            f"got {device!r}"
+        )
+    near = _int(data, "near_rssi", d.near_rssi, f"{prefix}near_rssi")
+    far = _int(data, "far_rssi", d.far_rssi, f"{prefix}far_rssi")
+    if near <= far:
+        raise SettingsError(
+            f"{prefix}near_rssi ({near}) must be greater than far_rssi ({far}): "
+            "near is the stronger signal"
+        )
+    window, lost = data.get("window"), data.get("lost_after")
+    return DetectorSettings(
+        device=device.strip().upper(),
+        near_rssi=near,
+        far_rssi=far,
+        window=d.window if window is None else parse_duration(window, f"{prefix}window"),
+        lost_after=d.lost_after if lost is None else parse_duration(lost, f"{prefix}lost_after"),
+    )
+
+
+def _presence(data: Mapping[str, Any]) -> PresenceSettings:
+    _warn_unknown(data, {"mode", "sleep_after", "missed_events", "detector"}, "presence.")
+    d = PresenceSettings()
+    mode = data.get("mode", d.mode)
+    if mode not in PRESENCE_MODES:
+        raise SettingsError(
+            f"presence.mode: expected one of {', '.join(PRESENCE_MODES)}, got {mode!r}"
+        )
+    after = data.get("sleep_after")
+    missed = data.get("missed_events", list(d.missed_events))
+    if not isinstance(missed, list) or not all(e in EVENTS for e in missed):
+        raise SettingsError(
+            f"presence.missed_events: expected a list of {', '.join(EVENTS)}, got {missed!r}"
+        )
+    return PresenceSettings(
+        mode=mode,
+        sleep_after=(
+            d.sleep_after if after is None else parse_duration(after, "presence.sleep_after")
+        ),
+        missed_events=tuple(missed),
+        detector=_detector(_table(data, "detector", "presence.detector")),
+    )
+
+
 def parse(data: Mapping[str, Any]) -> Settings:
     """Build Settings from parsed TOML. Missing keys take defaults; unknown keys warn."""
-    _warn_unknown(data, {"enabled", "bridge", "sources", "quiet", "reactions", "escalation"}, "")
+    _warn_unknown(
+        data, {"enabled", "bridge", "sources", "quiet", "reactions", "escalation", "presence"}, ""
+    )
     quiet = _table(data, "quiet", "quiet")
     _warn_unknown(quiet, {"enabled", "schedule", "reactions"}, "quiet.")
     return Settings(
@@ -261,6 +350,7 @@ def parse(data: Mapping[str, Any]) -> Settings:
         quiet=_quiet(quiet),
         reactions=_reactions(_table(data, "reactions", "reactions"), "reactions."),
         escalation=_escalation(_table(data, "escalation", "escalation")),
+        presence=_presence(_table(data, "presence", "presence")),
     )
 
 

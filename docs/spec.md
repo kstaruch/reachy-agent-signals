@@ -20,6 +20,7 @@ A coding-agent session reaching one of three moments makes the robot react, so t
 - Claude Code plugin (hooks and a `/reachy` slash command).
 - macOS first, then verified on Windows.
 - Bridge on another machine than the agents, reached over the tailnet ([D10](decisions.md#d10--the-bridge-can-run-on-another-machine-the-tailnet-is-the-boundary)).
+- Presence (M6): the robot sleeps while the owner's phone is away from the desk ([D11](decisions.md#d11--the-robot-sleeps-when-the-phone-isnt-at-the-desk), see *Presence* below).
 
 **Not in v1** (designed for, not built)
 
@@ -37,8 +38,11 @@ A coding-agent session reaching one of three moments makes the robot react, so t
 └──────────────┘                        │  · per-source mode        │           │ 127.0.0.1:8000 │
 ┌──────────────┐  (later)               │  · queue + priority       │           └────────────────┘
 │ herdr        │ ─────────────────────► │  · escalation timers      │
-└──────────────┘                        │  · event log              │
-                                        └───────────────────────────┘
+└──────────────┘                        │  · presence (awake/asleep)│
+┌──────────────┐  POST /events          │  · event log              │
+│ presence-    │ ─────────────────────► │                           │
+│ watch (BLE)  │  near | away           └───────────────────────────┘
+└──────────────┘
 ```
 
 - **One process drives the robot.** Adapters never call the daemon. The daemon also serves other apps, and two controllers fight over the motors.
@@ -64,15 +68,15 @@ A coding-agent session reaching one of three moments makes the robot react, so t
 
 `session` and `cwd` identify which session it is: needed for clearing state, escalation and, later, deduplication between sources.
 
-- `event` is `started`, `done`, `blocked`, or `observe`. `observe` is logged and never reacts. The plugin sends it for extra hooks (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `SubagentStop`, `StopFailure`, every `Notification` type) while the open questions below are being settled. `detail` names the hook and tool or type, e.g. `PreToolUse:Bash`.
+- `event` is `started`, `done`, `blocked`, `observe`, or — from source `presence` only — `near` / `away` (see *Presence*). `observe` is logged and never reacts. The plugin sends it for extra hooks (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `SubagentStop`, `StopFailure`, every `Notification` type) while the open questions below are being settled. `detail` names the hook and tool or type, e.g. `PreToolUse:Bash`.
 - `hook` holds selected fields of the hook payload for the event log. Never the prompt text, tool input or messages: a prompt is reduced to its length and leading slash command (e.g. `/loop`).
 
 Bridge HTTP endpoints on `127.0.0.1:<bridge.port>`:
 - `POST /events`: one event as JSON. Requires `Content-Type: application/json`, which keeps web pages from posting cross-origin without a preflight. Answers `202 {"decision": ...}`.
 - `GET /health`: liveness, counts per decision, event log path, what's playing and pending, blocked sessions.
 - `GET /status`: `/health` plus the settings in effect and robot state (daemon reachable, motor mode, app lock). Used by `reachy-signals status`.
-- `POST /try`: `{"event": "started" | "done" | "blocked" | "escalation"}`. Plays that reaction and answers with the outcome when it's done. Used by `reachy-signals try`.
-- `POST /settings`: exactly one of `{"enabled": bool}`, `{"quiet": bool}`, `{"source": {"name": ..., "mode": ...}}`. Applies it to the bridge's own settings file with the CLI's validated, atomic edit and answers `200 {"settings": ...}` (the `settings` part of `/status`), or `422 {"error": ...}` for a bad request or an already invalid file. Used by the CLI when `bridge.url` is set.
+- `POST /try`: `{"event": "started" | "done" | "blocked" | "escalation" | "missed"}`. Plays that reaction and answers with the outcome when it's done. Used by `reachy-signals try`.
+- `POST /settings`: exactly one of `{"enabled": bool}`, `{"quiet": bool}`, `{"source": {"name": ..., "mode": ...}}`, `{"presence": "off" | "auto" | "awake" | "asleep"}`. Applies it to the bridge's own settings file with the CLI's validated, atomic edit and answers `200 {"settings": ...}` (the `settings` part of `/status`), or `422 {"error": ...}` for a bad request or an already invalid file. Used by the CLI when `bridge.url` is set.
 
 Event log: one JSON line per event received, with the bridge's `decision`. macOS `~/Library/Logs/reachy-signals/events.jsonl`, Windows `%LOCALAPPDATA%\reachy-signals\Logs\events.jsonl`. Rotated at 10 MB, keeping one backup.
 
@@ -97,7 +101,7 @@ Verified against the [hooks reference](https://code.claude.com/docs/en/hooks.md)
 1. **Drop or pass.** Master switch off, source `off` or `shadow` → log the event and stop. `shadow` exists to compare a new source against a trusted one without moving the robot.
 2. **Choose the reaction.** `[quiet.reactions]` if quiet mode is on (manual toggle, or the current time is inside a `quiet.schedule` range), else `[reactions]`. Several names → random pick. Empty list → no reaction.
 3. **Check the robot is ours.** `GET /api/daemon/robot-app-lock-status`; anything other than `free` (`local_app`, `remote_session`) means something else owns the robot → skip (log it).
-4. **Make sure it can move.** If the motor mode is anything other than `enabled` (`disabled`, `gravity_compensation`), enable and wake up first. The daemon accepts moves silently while motors are off, so this check is not optional.
+4. **Make sure it can move.** If the motor mode is anything other than `enabled` (`disabled`, `gravity_compensation`), enable and wake up first. The daemon accepts moves silently while motors are off, so this check is not optional. **Except while presence has put the robot to sleep:** then the event isn't played at all (see *Presence*).
 5. **Serialise.** One gesture at a time. Priority `blocked` > `done` > `started`. A `blocked` arriving during a lower-priority gesture interrupts it (`POST /api/move/stop`). Several `started` events in a burst collapse into one.
 6. **Drop stale events.** A reaction that comes late is misleading. An event older than `bridge.max_event_age` when its turn comes is logged and dropped, never replayed. That covers the daemon being down, the robot being locked, or a long queue. A queued event for a session that has since sent a newer event is dropped too.
 7. **Track blocked sessions.** A session stays blocked until its next event. If still blocked after `escalation.blocked_after`, play the escalation reaction once. In quiet mode the escalation is skipped when `[quiet.reactions] blocked` is empty, so silencing `blocked` silences its reminder too.
@@ -107,6 +111,7 @@ Every outcome is written to the event log as a `"kind": "reaction"` record:
 - `played`, `interrupted` (with the move and `seconds`);
 - `no-reaction`, `locked` (with the holder), `daemon-unavailable`, `unknown-move`, `error`;
 - `stale`, `superseded`, `collapsed`, `cleared`;
+- `asleep` (the robot was asleep when its turn came; see *Presence*);
 - or the drop/pass decision when settings changed while the event was queued.
 
 At startup `serve` checks that every configured move exists and warns about unknown names.
@@ -119,6 +124,35 @@ After a gesture the robot is left awake, even if the bridge woke it (open questi
 
 The bridge is also the only path to the robot for the CLI: `try` asks the bridge to play a reaction, and `status` asks the bridge for robot state. Neither calls the daemon itself.
 
+## Presence (M6)
+
+The robot is awake only while the owner's phone is within about 2 m of the bridge host. Detector, measurements and pairing: [presence.md](presence.md). Why: [D11](decisions.md#d11--the-robot-sleeps-when-the-phone-isnt-at-the-desk).
+
+**Detector.** `reachy-signals presence-watch` runs on the bridge host, scans for the paired phone over Bluetooth LE, and posts `{"source": "presence", "event": "near" | "away"}` to the bridge on every change, and the current state again every 60 s. It never calls the daemon.
+
+**Bridge state.** Presence events get decision `presence` in the event log; repeats of the state already known are counted but not logged. The bridge keeps:
+
+- the phone: `near`, `away`, or unknown (no presence event since the bridge started);
+- the robot: `awake` (assumed at start: the daemon wakes it at boot) or `asleep` (put to sleep by the bridge);
+- a `missed` flag.
+
+What the bridge does, by `presence.mode`:
+
+| Mode | Robot |
+|---|---|
+| `off` (default) | Presence ignored; behaviour as without M6. Events from `presence` are still logged |
+| `auto` | Phone `near` → wake now. Phone `away` for `presence.sleep_after` → sleep. Unknown → leave as is |
+| `awake` | Wake if asleep, then stay awake |
+| `asleep` | Sleep if awake, then stay asleep |
+
+- **Sleep** = wait until idle, `goto_sleep`, then motors `disabled` — the same rest state the daemon leaves the robot in when it stops. Any queued gestures are dropped with outcome `asleep`. Blocked sessions stop escalating; one still blocked sets `missed` if `blocked` is in `missed_events`.
+- **Wake** = motors `enabled`, `wake_up`, then the `missed` reaction if the flag is set and the master switch is on, then the flag clears. Escalation doesn't restart for sessions that were blocked before the sleep: `missed` has already said it.
+- **While asleep,** an event that would have played (decision `pass`) is logged with decision `asleep` instead and never queued. If its event is in `presence.missed_events`, the `missed` flag is set. Observation events still clear blocked sessions.
+- Sleep and wake are done by the reactor thread, like every other robot move: a gesture in progress finishes first. A robot held by another app is left alone, and the bridge tries again 30 s later.
+- **`try` while asleep** wakes the robot for the gesture, then puts it back to sleep.
+
+Sleep and wake are written to the event log as `"kind": "presence"` records with `action` (`sleep` / `wake`) and `outcome` (`done`, `locked`, `daemon-unavailable`, `error`). The `missed` reaction is a normal `"kind": "reaction"` record with `reaction: "missed"`.
+
 ## Settings
 
 TOML, one file, location from `platformdirs`:
@@ -126,7 +160,7 @@ TOML, one file, location from `platformdirs`:
 - macOS: `~/Library/Application Support/reachy-signals/config.toml`
 - Windows: `%APPDATA%\reachy-signals\config.toml`
 
-Full sketch: [`config.example.toml`](../config.example.toml). Sections: master `enabled`, `[bridge]`, `[sources.*]` with `mode = drive | shadow | off`, `[quiet]`, `[reactions]`, `[quiet.reactions]`, `[escalation]`.
+Full sketch: [`config.example.toml`](../config.example.toml). Sections: master `enabled`, `[bridge]`, `[sources.*]` with `mode = drive | shadow | off`, `[quiet]`, `[reactions]`, `[quiet.reactions]`, `[escalation]`, `[presence]`, `[presence.detector]`. `[reactions]` and `[quiet.reactions]` also take `missed`, the reaction after waking up when something was missed.
 
 The bridge reloads the file on change. All control surfaces edit the file through the CLI, so there is one source of truth.
 
@@ -135,7 +169,7 @@ The bridge reloads the file on change. All control surfaces edit the file throug
 `[bridge] url` is read by clients only. Empty (default): the bridge is `http://127.0.0.1:<bridge.port>` and the CLI edits the local file. Set, for example `https://<host>.<tailnet>.ts.net:8765`:
 
 - `emit`, `status` and `try` use that URL.
-- `on`, `off`, `quiet [on|off]` and `source` send the change to the bridge (`POST /settings`); the file that changes is the one on the bridge machine. `quiet` alone shows the settings in effect there.
+- `on`, `off`, `quiet [on|off]`, `source` and `presence <mode>` send the change to the bridge (`POST /settings`); the file that changes is the one on the bridge machine. `quiet` alone shows the settings in effect there.
 - Nothing else in the client's file is used. A client file is typically just `[bridge]` and `url`.
 
 On the bridge machine: `tailscale serve --bg --https=8765 http://127.0.0.1:8765`. Tailnet only; never Funnel.
@@ -150,11 +184,14 @@ reachy-signals source <name> <mode>  drive | shadow | off
 reachy-signals status [--json]       settings, robot state, blocked sessions (asks the bridge)
 reachy-signals emit <event> ...      used by adapters; reads hook JSON from stdin
 reachy-signals try <event>           play the configured reaction now (through the bridge);
-                                     started | done | blocked | escalation
+                                     started | done | blocked | escalation | missed
+reachy-signals presence [<mode>]     show presence, or set presence.mode: off | auto | awake | asleep
+reachy-signals presence-watch        run the Bluetooth presence detector (Linux, bridge host)
+         [--calibrate]               print live RSSI and what it would decide; post nothing
 reachy-signals paths                 settings file and event log locations
 ```
 
-`on`, `off`, `quiet on|off` and `source` edit the settings file with `tomlkit`, keeping comments and layout. A change is validated with the bridge's own parser before it's saved, and saved atomically, so hot reload never sees a broken file. An already invalid file is never edited: fix it by hand first. If the file doesn't exist, it's created with just the changed key. `status` and `try` exit 1 when the bridge isn't running.
+`on`, `off`, `quiet on|off`, `source` and `presence <mode>` edit the settings file with `tomlkit`, keeping comments and layout. A change is validated with the bridge's own parser before it's saved, and saved atomically, so hot reload never sees a broken file. An already invalid file is never edited: fix it by hand first. If the file doesn't exist, it's created with just the changed key. `status` and `try` exit 1 when the bridge isn't running.
 
 ## Claude Code plugin
 
@@ -190,4 +227,4 @@ From a real session on 2026-11-14 (Claude Code 2.1.325, macOS, `permission_mode:
 - **Esc mid-task sends nothing.** An interrupted turn shows as `started` followed by the next prompt's `started`, with no `done` and no other hook in between. So an interrupt is invisible until the next prompt. That's harmless for `started`/`done`; for `blocked` it's the open question above.
 - **Latency:** an event reaches the bridge ~40 ms after the hook fires.
 - Whether `started` on every prompt is too much even with a 2-second nod; possibly debounce per session, and ignore `UserPromptSubmit` that isn't a human prompt (e.g. `/loop` iterations). `/reachy` itself is already ignored.
-- Whether to put the robot back to sleep after a gesture if the bridge woke it.
+- Whether to put the robot back to sleep after a gesture if the bridge woke it. With presence on (`auto`), presence decides; with it `off`, still open.

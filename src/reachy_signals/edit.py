@@ -19,7 +19,7 @@ from tomlkit.exceptions import TOMLKitError
 from tomlkit.items import Table
 from tomlkit.toml_document import TOMLDocument
 
-from .settings import MODES, Settings, SettingsError, config_path, parse
+from .settings import MODES, PRESENCE_MODES, Settings, SettingsError, config_path, parse
 
 HEADER = (
     "reachy-agent-signals settings. Created by the reachy-signals CLI.\n"
@@ -124,5 +124,17 @@ def set_source(name: str, mode: str) -> Callable[[TOMLDocument], None]:
             t["mode"] = mode
             t.add(tomlkit.nl())
             sources.add(name, t)
+
+    return change
+
+
+def set_presence(mode: object) -> Callable[[TOMLDocument], None]:
+    if mode not in PRESENCE_MODES:
+        raise SettingsError(
+            f"presence mode must be one of {', '.join(PRESENCE_MODES)}, got {mode!r}"
+        )
+
+    def change(doc: TOMLDocument) -> None:
+        _table(doc, "presence")["mode"] = mode
 
     return change

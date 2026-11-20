@@ -14,7 +14,11 @@ from typing import Any
 # Events that can make the robot react.
 REACTION_EVENTS = ("started", "done", "blocked")
 # ``observe``: logged for the spec's open questions, never reacted to.
+# These are what agent adapters (``emit``) send.
 EVENT_NAMES = (*REACTION_EVENTS, "observe")
+# From ``presence-watch`` only: the owner's phone came near the desk, or left it.
+PRESENCE_EVENTS = ("near", "away")
+ALL_EVENTS = (*EVENT_NAMES, *PRESENCE_EVENTS)
 
 _SLASH = re.compile(r"^\s*(/[\w:.-]+)")
 
@@ -61,8 +65,8 @@ class Event:
         source, event = data.get("source"), data.get("event")
         if not isinstance(source, str) or not source:
             raise EventError("'source' must be a non-empty string")
-        if event not in EVENT_NAMES:
-            raise EventError(f"'event' must be one of {', '.join(EVENT_NAMES)}, got {event!r}")
+        if event not in ALL_EVENTS:
+            raise EventError(f"'event' must be one of {', '.join(ALL_EVENTS)}, got {event!r}")
         values: dict[str, Any] = {"source": source, "event": event}
         for key in ("session", "cwd", "detail", "ts"):
             if key in data:

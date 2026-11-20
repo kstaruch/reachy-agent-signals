@@ -193,6 +193,20 @@ class DaemonClient:
         uuid = self._request("POST", "/move/play/goto_sleep")["uuid"]
         self.wait_move(uuid, timeout)
 
+    def set_motor_mode(self, mode: str) -> None:
+        """``enabled``, ``disabled`` or ``gravity_compensation``."""
+        self._request("POST", f"/motors/set_mode/{_q(mode)}")
+
+    def sleep(self, timeout: float = 10.0) -> None:
+        """Sleep pose, then motors off: the rest state the daemon leaves when it stops.
+
+        With motors already off the pose is skipped (the daemon would accept it and
+        do nothing).
+        """
+        if self.motor_mode() == "enabled":
+            self.goto_sleep(timeout)
+        self.set_motor_mode("disabled")
+
 
 def _q(segment: str) -> str:
     return urllib.parse.quote(segment, safe="")

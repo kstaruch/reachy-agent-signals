@@ -17,6 +17,7 @@ from .events import REACTION_EVENTS, Event
 from .settings import Settings
 
 PRIORITY = {"started": 1, "done": 2, "blocked": 3}
+MISSED_PRIORITY = 2  # the `missed` reaction after presence wakes the robot: like `done`
 
 # Observation-only hooks that prove the agent is running again, so a blocked session
 # isn't blocked any more. Provisional answer to the spec's open question "what
@@ -29,6 +30,7 @@ SUPERSEDED = "superseded"  # the session sent a newer event first
 COLLAPSED = "collapsed"  # burst of `started`: only the newest plays
 STALE = "stale"  # older than bridge.max_event_age when its turn came
 CLEARED = "cleared"  # blocked job dropped because the session is running again
+ASLEEP = "asleep"  # dropped because presence put the robot to sleep
 
 # `reachy-signals try` waits for its gesture, so it may wait behind a long one.
 MANUAL_MAX_AGE = 30.0
@@ -41,14 +43,17 @@ class Job:
     seq: int
     escalation: bool = False
     manual: bool = False  # `reachy-signals try`: no drop/pass, no blocked tracking
+    missed: bool = False  # the `missed` reaction (presence), not an agent event
     on_done: Callable[[dict[str, Any]], None] | None = field(default=None, compare=False)
 
     @property
     def priority(self) -> int:
-        return PRIORITY[self.event.event]
+        return MISSED_PRIORITY if self.missed else PRIORITY[self.event.event]
 
     @property
     def kind(self) -> str:
+        if self.missed:
+            return "missed"
         return "escalation" if self.escalation else self.event.event
 
 
@@ -72,7 +77,8 @@ class Scheduler:
         key = _session_key(event)
         dropped: list[tuple[Job, str]] = []
         clears = event.event in REACTION_EVENTS or _is_clearing(event)
-        if clears and decision in (policy.PASS, policy.OBSERVE):
+        # ASLEEP clears too: a session that finished while the robot slept isn't blocked.
+        if clears and decision in (policy.PASS, policy.OBSERVE, policy.ASLEEP):
             if key in self.blocked and event.event != "blocked":
                 del self.blocked[key]
             # anything still queued for this session is out of date now
@@ -96,6 +102,7 @@ class Scheduler:
         now: float,
         escalation: bool = False,
         on_done: Callable[[dict[str, Any]], None] | None = None,
+        missed: bool = False,
     ) -> Job:
         """Queue a `try`: plays like a real event but leaves session state alone."""
         job = Job(
@@ -104,10 +111,31 @@ class Scheduler:
             seq=next(self._seq),
             escalation=escalation,
             manual=True,
+            missed=missed,
             on_done=on_done,
         )
         self.pending.append(job)
         return job
+
+    def submit_missed(self, event: Event, now: float) -> Job:
+        """Queue the `missed` reaction (presence just woke the robot)."""
+        job = Job(event=event, received=now, seq=next(self._seq), missed=True)
+        self.pending.append(job)
+        return job
+
+    def drop_all(self, reason: str) -> list[tuple[Job, str]]:
+        """Drop every queued job except `try` requests (presence put the robot to sleep)."""
+        return self._remove(lambda j: not j.manual, reason)
+
+    def silence_blocked(self) -> bool:
+        """No reminders for sessions blocked now. True if any session is blocked.
+
+        Used when the robot goes to sleep: the `missed` reaction on waking says it
+        instead, and a reminder for an old block right after waking would repeat it.
+        """
+        for b in self.blocked.values():
+            b.escalated = True
+        return bool(self.blocked)
 
     # --- output -------------------------------------------------------------
 

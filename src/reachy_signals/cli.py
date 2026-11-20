@@ -23,7 +23,7 @@ def build_parser():
 
     from .bridge import TRY_KINDS
     from .events import EVENT_NAMES
-    from .settings import MODES
+    from .settings import MODES, PRESENCE_MODES
 
     parser = argparse.ArgumentParser(
         prog="reachy-signals",
@@ -54,23 +54,50 @@ def build_parser():
     try_ = sub.add_parser("try", help="play the configured reaction now (via the bridge)")
     try_.add_argument("event", choices=TRY_KINDS)
 
+    presence = sub.add_parser(
+        "presence", help="show presence, or set it: robot awake only while your phone is near"
+    )
+    presence.add_argument("mode", nargs="?", choices=PRESENCE_MODES)
+    watch = sub.add_parser(
+        "presence-watch",
+        help="run the Bluetooth presence detector (Linux, on the bridge host)",
+    )
+    watch.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="print live signal strength; tell the bridge nothing",
+    )
+    watch.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+
     sub.add_parser("paths", help="show the settings file and event log locations")
     return parser
 
 
-def _serve(verbose: bool) -> int:
+def _logging(verbose: bool) -> None:
     import logging
-
-    from .bridge import serve
-    from .eventlog import log_dir
-    from .settings import config_path
 
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _serve(verbose: bool) -> int:
+    from .bridge import serve
+    from .eventlog import log_dir
+    from .settings import config_path
+
+    _logging(verbose)
     return serve(config_path(), log_dir() / "events.jsonl")
+
+
+def _presence_watch(calibrate: bool, verbose: bool) -> int:
+    from .presence_watch import run
+    from .settings import config_path
+
+    _logging(verbose)
+    return run(config_path(), calibrate=calibrate)
 
 
 def _paths() -> int:
@@ -95,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         return _serve(args.verbose)
     if args.command == "paths":
         return _paths()
-    if args.command in ("on", "off", "quiet", "source", "status", "try"):
+    if args.command == "presence-watch":
+        return _presence_watch(args.calibrate, args.verbose)
+    if args.command in ("on", "off", "quiet", "source", "status", "try", "presence"):
         from . import control
 
         if args.command in ("on", "off"):
@@ -106,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
             return control.source(args.name, args.mode)
         if args.command == "status":
             return control.status(args.json)
+        if args.command == "presence":
+            return control.presence(args.mode)
         return control.try_reaction(args.event)
     build_parser().print_help()
     return 0

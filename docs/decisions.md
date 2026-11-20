@@ -55,3 +55,17 @@ The robot moved to a dedicated always-on host next to the desk (a 64-bit Raspber
 - **`emit` keeps its 0.5 s budget.** Over a direct tailnet path the round trip is a few milliseconds plus a TLS handshake. When the bridge machine is off, hooks give up in 0.5 s and exit 0, as with a stopped local bridge.
 
 Rejected: binding the bridge to the tailnet address with a shared token (a secret on every client, and the bridge would need to know which interface to bind); an SSH tunnel per client (no code change, but `on`/`off`/`quiet` would silently edit the client's own file).
+
+## D11 — The robot sleeps when the phone isn't at the desk
+
+The robot is awake only while its owner is within about 2 m: the bridge host scans for the owner's paired phone over Bluetooth LE and judges distance from its signal strength (RSSI). Away → the robot goes to its sleep pose with motors off. Back → it wakes up. Measured first, before deciding ([presence.md](presence.md)): medians fall from −56 dBm at 1 m to −63 at 2 m and −71 at 3 m, a phone in a trouser pocket at 2 m loses only about 1 dB, and another room reads −84. Single readings swing ±12 dB, so only a smoothed value is used.
+
+- **Detection is its own process, `reachy-signals presence-watch`, on the bridge host.** It posts `near` / `away` to the bridge like any other adapter. The bridge stays platform-neutral (D4), the robot still has one owner (D3), and the detector is Linux-only without making the bridge so.
+- **No new dependency (D9).** The detector reads `bluetoothctl`'s output instead of talking D-Bus. Its output streams line by line through a pipe (checked on the Pi: readings arrive within 0.2 s).
+- **Pair the phone once.** iPhones broadcast from a rotating LE address; pairing gives the host the key to resolve it, and BlueZ then reports every broadcast under the phone's fixed address. No key handling in this code.
+- **Two thresholds on a median.** Near when the median of the last few seconds is ≥ `near_rssi`, away when ≤ `far_rssi` or nothing is heard for `lost_after`. The gap between them stops flicker at the boundary.
+- **Asleep, events don't queue.** Each reaction event is logged with decision `asleep` and never played later (a late reaction is misleading — same reason as `max_event_age`). If any of them is in `presence.missed_events`, one `missed` reaction plays after the wake-up. Blocked sessions don't escalate while asleep.
+- **Leaving is slow, arriving is fast.** Waking happens on the first `near`; sleeping only after `presence.sleep_after` of `away`, so a trip to the kitchen doesn't put the robot to sleep.
+- **`presence.mode` is a setting (D2):** `off` (default, as before), `auto`, `awake`, `asleep`.
+
+Rejected: Wi-Fi presence (an iPhone's Wi-Fi sleeps for minutes and says nothing about the desk); iOS Shortcuts automations (home-level, not desk-level); Tailscale online status (says the phone has internet, not where it is); queueing events while asleep and replaying them on wake.

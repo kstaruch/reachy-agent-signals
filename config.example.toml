@@ -34,12 +34,26 @@ schedule = []                   # local time, e.g. ["22:00-08:00"]; ranges may c
 started = ["yeah_nod"]
 done    = ["cheerful1"]
 blocked = ["attentive1"]
+missed  = ["inquiring1"]        # after waking up, when something was missed (presence)
 
 [quiet.reactions]               # used instead of [reactions] while quiet mode is on
 started = ["yeah_nod"]          # placeholder: same as normal until silent moves are picked
 done    = ["cheerful1"]         # placeholder: has sound
 blocked = ["attentive1"]        # placeholder: has sound
+missed  = ["inquiring1"]        # placeholder: not yet watched
 
 [escalation]                    # still blocked after this long → play once
 blocked_after = "3m"
 blocked = ["toc-toc-toc"]
+
+[presence]                      # robot awake only while your phone is at the desk (docs/presence.md)
+mode = "off"                    # off | auto | awake | asleep
+sleep_after = "2m"              # phone away this long → robot sleeps
+missed_events = ["done", "blocked"]  # events that, arriving while asleep, earn a `missed` reaction on wake
+
+[presence.detector]             # read by `reachy-signals presence-watch` on the bridge host only
+device = ""                     # the paired phone's Bluetooth address (bluetoothctl devices Paired)
+near_rssi = -65                 # median at or above this → near   (≈ 2 m, see docs/presence.md)
+far_rssi = -70                  # median at or below this → away   (≈ 3 m)
+window = "8s"                   # median over the readings of this long
+lost_after = "30s"              # nothing heard from the phone this long → away

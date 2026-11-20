@@ -19,9 +19,9 @@ from typing import Any
 
 from . import policy
 from .eventlog import EventLog
-from .events import Event, EventError, now_iso
+from .events import REACTION_EVENTS, Event, EventError, now_iso
 from .reactor import Reactor
-from .settings import Settings, SettingsError, quiet_active
+from .settings import REACTION_KINDS, Settings, SettingsError, quiet_active
 from .watch import SettingsWatcher
 
 log = logging.getLogger(__name__)
@@ -31,8 +31,8 @@ MAX_BODY = 64_000
 # The plugin's slash command. Its turn (started, then done) doesn't move the robot:
 # `/reachy status` shouldn't nod and cheer.
 CONTROL_COMMANDS = ("/reachy", "/reachy-signals:reachy")
-TRY_KINDS = ("started", "done", "blocked", "escalation")
-SETTINGS_KEYS = ("enabled", "quiet", "source")
+TRY_KINDS = ("started", "done", "blocked", "escalation", "missed")
+SETTINGS_KEYS = ("enabled", "quiet", "source", "presence")
 
 
 class Bridge:
@@ -51,6 +51,15 @@ class Bridge:
 
     def handle(self, event: Event) -> str:
         decision = self._control_turn(event, policy.drop_or_pass(self.watcher.current(), event))
+        if decision == policy.PRESENCE:
+            return self._presence(event)
+        if (
+            decision == policy.PASS
+            and event.event in REACTION_EVENTS
+            and self.reactor is not None
+            and self.reactor.asleep()
+        ):
+            decision = policy.ASLEEP
         self.event_log.append({"received": now_iso(), **event.to_dict(), "decision": decision})
         with self._lock:
             self._counts[decision] = self._counts.get(decision, 0) + 1
@@ -65,6 +74,18 @@ class Bridge:
             event.session[:8],
             decision,
         )
+        return decision
+
+    def _presence(self, event: Event) -> str:
+        """near/away: update presence. Only changes are logged; repeats (the detector's
+        heartbeat) are just counted."""
+        changed = self.reactor.on_presence(event) if self.reactor is not None else True
+        decision = policy.PRESENCE
+        with self._lock:
+            self._counts[decision] = self._counts.get(decision, 0) + 1
+        if changed:
+            self.event_log.append({"received": now_iso(), **event.to_dict(), "decision": decision})
+            log.info("presence: phone %s", event.event)
         return decision
 
     def _control_turn(self, event: Event, decision: str) -> str:
@@ -120,6 +141,8 @@ class Bridge:
             if not isinstance(value, dict) or set(value) != {"name", "mode"}:
                 raise SettingsError('source: expected {"name": ..., "mode": ...}')
             change = edit.set_source(str(value["name"]), str(value["mode"]))
+        elif key == "presence":
+            change = edit.set_presence(value)
         elif not isinstance(value, bool):
             raise SettingsError(f"{key}: expected true or false, got {value!r}")
         else:
@@ -171,6 +194,11 @@ def settings_summary(s: Settings, path: Path) -> dict[str, Any]:
         },
         "sources": dict(s.sources),
         "reactions": _reactions_dict(s.quiet.reactions if quiet_active(s) else s.reactions),
+        "presence": {
+            "mode": s.presence.mode,
+            "sleep_after": s.presence.sleep_after,
+            "missed_events": list(s.presence.missed_events),
+        },
     }
 
 
@@ -179,7 +207,7 @@ def _fmt_range(r: Any) -> str:
 
 
 def _reactions_dict(r: Any) -> dict[str, list[str]]:
-    return {e: list(r.for_event(e)) for e in ("started", "done", "blocked")}
+    return {e: list(r.for_event(e)) for e in REACTION_KINDS}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -345,8 +373,8 @@ def _check_moves(watcher: SettingsWatcher) -> None:
 
     s = watcher.current()
     names = [
-        *(n for e in ("started", "done", "blocked") for n in s.reactions.for_event(e)),
-        *(n for e in ("started", "done", "blocked") for n in s.quiet.reactions.for_event(e)),
+        *(n for e in REACTION_KINDS for n in s.reactions.for_event(e)),
+        *(n for e in REACTION_KINDS for n in s.quiet.reactions.for_event(e)),
         *s.escalation.blocked,
     ]
     try:
